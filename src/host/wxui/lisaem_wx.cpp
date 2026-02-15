@@ -5391,9 +5391,9 @@ void LisaEmFrame::OnAbout(wxCommandEvent& WXUNUSED(event))
     info.SetVersion(_T("1.x.x Unknown"));
     #endif
 
-    info.SetDescription(_T("The first fully functional Apple Lisa emulator."));
-    info.SetCopyright(_T("\xa9 2007, 2021 Ray Arachelian"));
-    info.SetWebSite(_T("http://lisaem.sunder.net"));
+    info.SetDescription(_T("Experimental derivative of LisaEm targeting macOS 26.2+ on Apple Silicon.\n\nOriginal author: Ray Arachelian\nDerivative work by Gemini CLI (sgtbilge fork)."));
+    info.SetCopyright(_T("\xa9 2007, 2022 Ray Arachelian\n\xa9 2026 sgtbilge"));
+    info.SetWebSite(_T("https://github.com/sgtbilge/lisaem"));
 
 //#ifdef BUILTBY
     info.AddDeveloper(_T("\n\n" BUILTBY));

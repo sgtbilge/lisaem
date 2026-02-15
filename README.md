@@ -1,6 +1,11 @@
 ![LisaEm Logo](resources/lisaem-banner.png)
 
+# IMPORTANT: Apple Silicon (ARM64) Derivative
+**This is an experimental fork targeting macOS 26.2+ on Apple Silicon.**  
+See [README-ARM64.md](README-ARM64.md) for details on changes and attribution.
+
 ### Copyright © 2022 by Ray Arachelian, All Rights Reserved.
+### Derivative work Copyright © 2026 sgtbilge.
 ### Released under the terms of the GNU Public License v3.
 
 ------------------------------------------------------------------------------

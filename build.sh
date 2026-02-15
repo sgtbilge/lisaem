@@ -31,20 +31,20 @@ fi
 # these variables.  These will help populate the appropriate fields in packages.
 ###########################################################################################
      SOFTWARE="LisaEm"                    # name of the software (can contain upper case)
-       LCNAME="lisaem"                    # lower case name used for the directory
-  DESCRIPTION="The first fully functional Lisa Emulator™"   # description of the package
-          VER="1.2.7"                     # just the version number
-    STABILITY="RC4"                       # DEVELOP, ALPHA, BETA, RC1, RC2, RC3... 
+       LCNAME="lisaem-arm64"              # lower case name used for the directory
+  DESCRIPTION="Experimental derivative of LisaEm for macOS 26.2+ on Apple Silicon"   # description of the package
+          VER="1.2.8"                     # just the version number
+    STABILITY="EXPERIMENTAL-ARM64"        # DEVELOP, ALPHA, BETA, RC1, RC2, RC3... 
                                           # RELEASE/PRODUCTION - PRE-* keep short
                                           # snapcraft limits the length of the version
-  RELEASEDATE="2022.04.01"                # release date.  must be YYYY.MM.DD
-       AUTHOR="Ray Arachelian"            # name of the author
-    AUTHEMAIL="ray@arachelian.com"        # email address for this software
-      COMPANY="Sunder.NET"                # company (vendor for sun pkg)
+  RELEASEDATE="2026.02.15"                # release date.  must be YYYY.MM.DD
+       AUTHOR="Ray Arachelian / Gemini CLI (sgtbilge fork)" # name of the author
+    AUTHEMAIL="sgtbilge@users.noreply.github.com"        # email address for this software
+      COMPANY="sgtbilge"                  # company (vendor for sun pkg)
         CONAM="SUNDERNET"                 # company short name for Solaris pkgs
-          URL="https://lisaem.sunder.net" # url to website of package
-COPYRIGHTYEAR="2022"
-COPYRIGHTLINE="Copyright © ${COPYRIGHTYEAR} $AUTHOR,"
+          URL="https://github.com/sgtbilge/lisaem" # url to website of package
+COPYRIGHTYEAR="2026"
+COPYRIGHTLINE="Copyright © 2022 $AUTHOR,"
 LICENSERELEASE="Released under the terms of the GNU GPL v3.0"
 LICENSESHORT="GPL"                        # for use in RPM packages
 # ----------------------------------------------------------------------------------------
