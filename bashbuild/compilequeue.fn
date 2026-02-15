@@ -71,10 +71,12 @@ function qjob {
     # create a unique job name to launch # we don't care that much about the names, we just want
     # unique ones.
     jobnum=$(( $jobnum + 1 ))
-    export SLOTNAME="slot.$$.${jobnum}.sh"
-    while [[ -f "$SLOTNAME" ]]; do
+    RAND=$(( $RANDOM % 1000 ))
+    export SLOTNAME="slot.$$.${RAND}.${jobnum}.sh"
+    while [[ -f "$SLOTNAME" ]] || [[ -f "/tmp/$SLOTNAME.out" ]] || [[ -f "/tmp/$SLOTNAME.done" ]] || [[ -f "/tmp/$SLOTNAME.failed" ]]; do
       jobnum=$(( $jobnum + 1 ))
-      export SLOTNAME="slot.$$.${jobnum}.sh"
+      RAND=$(( $RANDOM % 1000 ))
+      export SLOTNAME="slot.$$.${RAND}.${jobnum}.sh"
     done
 
     # ------------------------------------------------------------------------------------------------

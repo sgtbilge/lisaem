@@ -105,7 +105,7 @@ esac
 # Apple Silicon (arm64) only — force arm64 to avoid issues with x86_64 Rosetta shells
 export SIXTYFOURBITS=""
 export THIRTYTWOBITS=""
-export ARCH="-arch arm64"
+export ARCH="-arch arm64 -mmacosx-version-min=${MIN_MACOSX_VERSION}"
 
 export CFLAGS="${CFLAGS} -mmacosx-version-min=${MIN_MACOSX_VERSION}"
 export CXXFLAGS="${CXXFLAGS} -mmacosx-version-min=${MIN_MACOSX_VERSION}"
