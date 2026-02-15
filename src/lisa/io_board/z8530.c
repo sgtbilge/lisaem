@@ -224,8 +224,8 @@ char read_serial_port_pty(unsigned int port) {return 0;}
 int  poll_telnet_serial_read(int portnum)    {return 0;}
 #endif
 
-void write_serial_port_terminal(int port, uint8 data);
-char read_serial_port_terminal(int port);
+void write_serial_port_terminal(unsigned int port, char data);
+char read_serial_port_terminal(unsigned int port);
 
 static inline void on_read_irq_handle(int port);
 
@@ -375,8 +375,8 @@ void scc_channel_reset_port(unsigned int port)
 }
 
 
-extern char read_serial_port_terminal(int port);
-extern void write_serial_port_terminal(int port, uint8 data);
+extern char read_serial_port_terminal(unsigned int port);
+extern void write_serial_port_terminal(unsigned int port, char data);
 
 void read_port_if_ready_nothing(unsigned int port) { (void)(port); return; }
 

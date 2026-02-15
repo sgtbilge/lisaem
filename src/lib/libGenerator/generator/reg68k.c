@@ -2374,7 +2374,17 @@ void reg68k_internal_vector(int vno, uint32 oldpc, uint32 addr_error)
 
     abort_opcode=2;  reg68k_pc=GETVECTOR(vno);    // should turn this into vector 15 - spurious IRQ
     if (abort_opcode==1) {EXIT(58,0,"Doh got abort_opcode=1 on vector fetch in %s - BYE BYE\n",__FUNCTION__); }
-    if (reg68k_pc &1)    {EXIT(58,0,"Doh odd PC value (%08x) on vector (%d) fetch in %s - BYE BYE\n",reg68k_pc,vno,__FUNCTION__); }
+    if (reg68k_pc &1)    
+    {
+        char msg[512];
+        snprintf(msg, 512, "Doh! Odd PC value (%08x) on vector (%d) fetch in %s.\n\nThis usually means disk or memory corruption (e.g. from an improper shutdown).\n\nWould you like to try rebooting the Lisa?", reg68k_pc, vno, __FUNCTION__);
+        if (yesnomessagebox(msg, "Fatal Emulator Error"))
+        {
+            lisa_rebooted();
+            return;
+        }
+        EXIT(58,0,"Doh odd PC value (%08x) on vector (%d) fetch in %s - BYE BYE\n",reg68k_pc,vno,__FUNCTION__); 
+    }
 
     abort_opcode=0;
 
@@ -2390,6 +2400,11 @@ void reg68k_internal_vector(int vno, uint32 oldpc, uint32 addr_error)
       #ifdef DEBUG
       debug_on("reg68k_pc=0"); 
       #endif
+      if (yesnomessagebox("Fatal Error: reg68k_pc got nullified.\n\nThis usually indicates a severe internal error or memory corruption.\n\nWould you like to try rebooting the Lisa?", "Fatal Emulator Error"))
+      {
+          lisa_rebooted();
+          return;
+      }
       EXIT(59,0,"reg68k_pc got nullified. bye");  
     }
     if (reg68k_pc& 1)   LISA_REBOOTED();

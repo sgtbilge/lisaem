@@ -149,16 +149,8 @@ for i in $@; do
     ;;
 #DEBUG DEBUGMEMCALLS IPC_COMMENTS
 
-  -64|--64|-m64)
-                               export SIXTYFOURBITS="--64"; 
-                               export THIRTYTWOBITS="";
-                               export ARCH="-m64"; export SARCH="-m64"  ;;
-
-  -32|--32|-m32)
-                               export SIXTYFOURBITS=""; 
-                               export THIRTYTWOBITS="--32"; 
-                               [[ "$MACHINE" == "x86_64" ]] && export MACHINE="i386"
-                               export ARCH="-m32" ; export SARCH="-m32"  ;;
+  -64|--64|-m64|-32|--32|-m32|-march=*|-arch=*)
+                               echo "Architecture options are no longer supported. Building for native arm64 only." 1>&2 ;;
 
  --no-debug)                   WITHDEBUG=""
                                WARNINGS=""                               ;;
@@ -173,12 +165,6 @@ for i in $@; do
  --tracelog)                   WITHTRACE="-DDEBUG -DTRACE"
                                WARNINGS="-Wall"                          ;;
  --no-banner)                  NOBANNER="1";                             ;;
-
-
- -march=*)                     export ARCH="${i} $ARCH"                  ;;
-
- -arch=*)                      export ARCH="$(echo ${i} | sed -e 's/=/ /g') $ARCH"
-                               export SARCH="$i $SARCH"                  ;;
 
  *)                            UNKNOWNOPT="$UNKNOWNOPT $i"               ;;
  esac
@@ -274,7 +260,7 @@ fi
 if [[ -n "$WHICHLIBDC42" ]]; then
    WHICHLIBDC42="../$WHICHLIBDC42"
 else
-   subbuild src/lib/libdc42      --no-banner             $SIXTYFOURBITS $SARCH
+   subbuild src/lib/libdc42      --no-banner
    WHICHLIBDC42="`ls src/lib/libdc42/lib/libdc42.*.a 2>/dev/null`"
    if [[ ! -f "$WHICHLIBDC42" ]]; then exit 1; fi
    DC42INCLUDE="../../lib/libdc42/include"

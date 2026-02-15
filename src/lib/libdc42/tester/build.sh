@@ -144,16 +144,8 @@ for i in $@; do
     ;;
 #DEBUG DEBUGMEMCALLS IPC_COMMENTS
 
-  -64|--64|-m64)
-                               export SIXTYFOURBITS="--64"; 
-                               export THIRTYTWOBITS="";
-                               export ARCH="-m64"; export SARCH="-m64"  ;;
-
-  -32|--32|-m32)
-                               export SIXTYFOURBITS=""; 
-                               export THIRTYTWOBITS="--32"; 
-                               [[ "$MACHINE" == "x86_64" ]] && export MACHINE="i386"
-                               export ARCH="-m32" ; export SARCH="-m32"  ;;
+  -64|--64|-m64|-32|--32|-m32|-march=*|-arch=*)
+                               echo "Architecture options are no longer supported. Building for native arm64 only." 1>&2 ;;
 
  --without-debug)              WITHDEBUG=""
                                WARNINGS=""                               ;;
@@ -168,12 +160,6 @@ for i in $@; do
  --with-tracelog)              WITHTRACE="-DDEBUG -DTRACE"
                                WARNINGS="-Wall"                          ;;
  --no-banner)                  NOBANNER="1";                             ;;
-
-
- -march=*)                     export ARCH="${i} $ARCH"                  ;;
-
- -arch=*)                      export ARCH="$(echo ${i} | sed -e 's/=/ /g') $ARCH"
-                               export SARCH="$i $SARCH"                  ;;
 
  *)                            UNKNOWNOPT="$UNKNOWNOPT $i"               ;;
  esac
@@ -271,7 +257,7 @@ if [[ -n "$WHICHLIBDC42" ]]; then
    WHICHLIBDC42="../$WHICHLIBDC42"
 else
    echo "Building libdc42..." 1>&2
-   subbuild ..  --no-banner      $SIXTYFOURBITS $SARCH
+   subbuild ..  --no-banner
    WHICHLIBDC42="`ls ../lib/libdc42.*.a 2>/dev/null`"
    if [[ ! -f "$WHICHLIBDC42" ]]; then exit 1; fi
    DC42INCLUDE="../../lib/libdc42/include"
@@ -280,7 +266,7 @@ fi
 
 cd src
 
-export COMPILECOMMAND="$CC $CLICMD -o :OUTFILE: -W $WARNINGS -Wstrict-prototypes $WITHDEBUG $WITHTRACE $ARCH $CFLAGS -I $DC42INCLUDE $INC -Wno-format -Wno-unused :INFILE:.c $WHICHLIBDC42"
+export COMPILECOMMAND="$CC $CLICMD -o :OUTFILE: -W $WARNINGS -Wstrict-prototypes $WITHDEBUG $WITHTRACE $CFLAGS $ARCH -I $DC42INCLUDE $INC -Wno-format -Wno-unused :INFILE:.c $WHICHLIBDC42"
 LIST1=$(WAIT="yes" OBJDIR="../bin/$MACOSX_MAJOR_VER/" INEXT=c OUTEXT="${EXTTYPE}" VERB=Compiled COMPILELIST \
 	$(for i in $SRCLIST; do echo $i; done) )
 

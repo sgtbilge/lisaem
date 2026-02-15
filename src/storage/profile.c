@@ -448,7 +448,7 @@ void do_profile_write(ProFileType *P,uint32 block)
 
 
     //2007.01.25
-    //P->DC42.synconwrite=1;              // Ensure data is immediately written to the disk.
+    P->DC42.synconwrite=1;              // Ensure data is immediately written to the disk.
 
     errno=0;
 

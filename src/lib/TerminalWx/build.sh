@@ -171,20 +171,8 @@ do
 
     ;;
 
-  -64|--64|-m64)
-                               export SIXTYFOURBITS="--64"; 
-                               export THIRTYTWOBITS="";
-                               export ARCH="-m64"; export SARCH="-m64" ;;
-
-  -32|--32|-m32)
-                               export SIXTYFOURBITS=""; 
-                               export THIRTYTWOBITS="--32"; 
-                               [[ "$MACHINE" == "x86_64" ]] && export MACHINE="i386"
-                               export ARCH="-m32"; export SARCH="-m32" ;;
-
- -march=*)                     export ARCH="${i} $ARCH"                ;;
- -arch=*)                      export ARCH="$(echo ${i} | sed -e 's/=/ /g') $ARCH"
-                               export SARCH="$i $SARCH"                ;;
+  -64|--64|-m64|-32|--32|-m32|-march=*|-arch=*)
+                               echo "Architecture options are no longer supported. Building for native arm64 only." 1>&2 ;;
 
  --no-debug)                   export WITHDEBUG=""
                                export WARNINGS=""                      ;;

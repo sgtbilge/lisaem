@@ -306,19 +306,8 @@ for j in $@; do
 
     ;;
 
-  -64|--64|-m64)                export SIXTYFOURBITS="--64"; 
-                                export THIRTYTWOBITS="";
-                                export ARCH="-m64"; export SARCH="-m64"     ;;
-
-  -32|--32|-m32)                export SIXTYFOURBITS=""; 
-                                export THIRTYTWOBITS="--32"; 
-                                [[ "$MACHINE" == "x86_64" ]] && export MACHINE="i386"
-                                export ARCH="-m32"; export SARCH="-m32"     ;;
-
-  -march=*|--march=*)           export ARCH="${opt} $ARCH"                  ;;
-  -arch=*|--arch=*)             export ARCH="$(echo ${opt} | sed -e 's/=/ /g') $ARCH"
-                                export ARCHOVERRIDE="$(echo ${opt} | cut -d= -f2 )"
-                                export SARCH="$opt $SARCH" ;;
+  -64|--64|-m64|-32|--32|-m32|-march=*|--march=*|-arch=*|--arch=*)
+                                echo "Architecture options are no longer supported. Building for native arm64 only." 1>&2 ;;
 
  --no-color-warn) export GCCCOLORIZED="" ;;
  --no-tools) export NODC42TOOLS="yes" ;;
@@ -495,11 +484,6 @@ Compiling Options:
 -DFOO                   Pass extra defines to C/C++ compilers
 -DFOO=BAR
 
---32|--64               Select 32 or 64 bit binaries (or -32|-m32|-64|-m64)
---arch={}               Compile for specific architecture
-                          i.e. x86_64, ppc, ppc64, arm64, etc...
-                          but you should avoid -32|-64
-
 Environment Variables you can pass:
 
 CC,CPP,GDB              Paths to C/C++ Compiler tools
@@ -592,10 +576,7 @@ needclean=0
 #debug and tracelog changes affect the whole project, so need to clean it all
 [[ "$WITHTRACE" != "$LASTTRACE"            ]]  && needclean=1 #&& echo "Clean Needed: LASTRACE Changed" 1>&2
 [[ "$WITHDEBUG" != "$LASTDEBUG"             ]] && needclean=1 #&& echo "Clean Needed: WITHDEBUG Changed" 1>&2
-[[ "$SIXTYFOURBITS" != "$LASTSIXTYFOURBITS" ]] && needclean=1 #&& echo "Clean Needed: SIXTYFOURBITS Changed :$SIXTYFOURBITS: :$LASTSITYFOURBITS:" 1>&2
-[[ "$THIRTYTWOITS" != "$LASTTHIRTYTWOBITS"  ]] && needclean=1 #&& echo "Clean Needed: THIRTYTWOBITS Changed" 1>&2
 [[ "$LASTWHICHWXCONFIG" != "$WHICHWXCONFIG" ]] && needclean=1 #&& echo "Clean Needed: WHICHWXCONFIG Changed" 1>&2
-[[ "$LASTARCH" != "$ARCH"                   ]] && needclean=1 #&& echo "Clean Needed: ARCH Changed" 1>&2
 # display mode changes affect only the main executable, mark it for recomoilation
 if [[ "$WITHBLITS" != "$LASTBLITS" ]]; then
   # rm -rf ./lisa/lisaem_wx.o ./lisa/lisaem ./lisa/lisaem.exe ./lisa/${SOFTWARE}.app;
@@ -606,10 +587,7 @@ cat  > "${TLD}/.last-opts" <<ENDLAST
 LASTTRACE="$WITHTRACE"
 LASTDEBUG="$WITHDEBUG"
 LASTBLITS="$WITHBLITS"
-LASTTHIRTYTWOBITS="$THIRTYTWOBITS"
-LASTSIXTYFOURBITS="$SIXTYFOURBITS" 
 LASTWHICHWXCONFIG="$WHICHWXCONFIG"
-LASTARCH="$ARCH"
 ENDLAST
 
 [[ "$needclean" -gt 0 ]] && CLEAN
@@ -624,11 +602,11 @@ export CXXFLAGS="$CXXFLAGS $NODEPRECATEDCPY $NOWARNFORMATTRUNC $NOUNKNOWNWARNING
 # estimate how many compile passes we need. if upx is enabled, which takes a very long time, multiply it by some factor
 # since upx uses a single core
 
-ESTLIBGENCOUNT=$(  subestimate src/lib/libGenerator --no-banner $LIBGENOPTS    $SIXTYFOURBITS $THIRTYTWOBITS  )
-ESTLIBDC42COUNT=$( subestimate src/lib/libdc42      --no-banner                $SIXTYFOURBITS $THIRTYTWOBITS  ) 
-ESTLIBDC42COUNT=$( subestimate src/lib/libdc42      --no-banner                $SIXTYFOURBITS $THIRTYTWOBITS  ) 
-ESTLIBTERMCOUNT=$( subestimate src/lib/TerminalWx   --no-banner                $SIXTYFOURBITS $THIRTYTWOBITS  ) 
-[[ -z "$NODC42TOOLS" ]] && ESTTOOLSCOUNT=$( subestimate src/tools  --no-banner $SIXTYFOURBITS $THIRTYTWOBITS  ) || ESTTOOLSCOUNT=0
+ESTLIBGENCOUNT=$(  subestimate src/lib/libGenerator --no-banner $LIBGENOPTS  )
+ESTLIBDC42COUNT=$( subestimate src/lib/libdc42      --no-banner              )
+ESTLIBDC42COUNT=$( subestimate src/lib/libdc42      --no-banner              )
+ESTLIBTERMCOUNT=$( subestimate src/lib/TerminalWx   --no-banner              )
+[[ -z "$NODC42TOOLS" ]] && ESTTOOLSCOUNT=$( subestimate src/tools  --no-banner ) || ESTTOOLSCOUNT=0
 ESTPHASE1COUNT=$( INEXT=${PHASE1INEXT} OUTEXT=${PHASE1OUTEXT} OBJDIR=${PHASE2OBJDIR} VERB=Compiling COUNTNEEDED ${PHASE1LIST} )
 ESTPHASE2COUNT=$( INEXT=${PHASE2INEXT} OUTEXT=${PHASE2OUTEXT} OBJDIR=${PHASE2OBJDIR} VERB=Compiling COUNTNEEDED ${PHASE2LIST} )
 
@@ -686,7 +664,7 @@ export PERCENTPROGRESS=0 PERCENTCEILING=${ESTLIBGENCOUNT}
 if [[ $ESTLIBGENCOUNT -gt 0 ]]; then
     export COMPILEPHASE="libGenerator"
     export PERCENTJOB=0 REUSESAVE=""
-    subbuild src/lib/libGenerator --no-banner $LIBGENOPTS $SIXTYFOURBITS $THIRTYTWOBITS $EXTRADEFINES $SARCH skipinstall
+    subbuild src/lib/libGenerator --no-banner $LIBGENOPTS $EXTRADEFINES skipinstall
     unset LIST
 fi
 
@@ -695,7 +673,7 @@ export PERCENTCEILING=$(( $PERCENTPROGRESS + $ESTLIBGENCOUNT ))
 if [[ $ESTLIBDC42COUNT -gt 0 ]]; then
   export COMPILEPHASE="libdc42"
   export PERCENTJOB=0 REUSESAVE="yes"
-  subbuild src/lib/libdc42      --no-banner             $SIXTYFOURBITS $THIRTYTWOBITS $EXTRADEFINES $SARCH skipinstall
+  subbuild src/lib/libdc42      --no-banner $EXTRADEFINES skipinstall
   unset LIST
 fi
 
@@ -704,7 +682,7 @@ export PERCENTCEILING=$(( $PERCENTPROGRESS + $ESTTOOLSCOUNT ))
 if  [[ $ESTTOOLSCOUNT -gt 0 ]]; then
     export COMPILEPHASE="tools"
     export REUSESAVE="yes"
-    subbuild src/tools            --no-banner           $SIXTYFOURBITS $THIRTYTWOBITS $SARCH $EXTRADEFINES
+    subbuild src/tools            --no-banner $EXTRADEFINES
     unset LIST
 fi
 
@@ -713,7 +691,7 @@ export PERCENTCEILING=$(( $PERCENTPROGRESS + $ESTLIBTERMCOUNT ))
 if  [[ $ESTLIBTERMCOUNT -gt 0 ]]; then
     export COMPILEPHASE="TerminalWx"
     export REUSESAVE="yes"
-    subbuild src/lib/TerminalWx  --no-banner             $SIXTYFOURBITS $THIRTYTWOBITS $SARCH $EXTRADEFINES
+    subbuild src/lib/TerminalWx  --no-banner $EXTRADEFINES
     unset LIST
 fi
 
@@ -759,7 +737,7 @@ export WINDOWS_RES_ICONS=$( printf 'lisa2icon   ICON   "lisa2icon.ico"\r\n')
 printf ' \r'  # eat twirly cursor, since we're not waitqing
 
 if needed lisaem_static_resources.cpp ${TLD}/obj/lisaem_static_resources.o; then
-  qjob "!!  Compiled lisaem_static_resources.cpp " $CXX $ARCH $CXXFLAGS $ARCH -c lisaem_static_resources.cpp -o ${TLD}/obj/lisaem_static_resources.o 1>&2
+  qjob "!!  Compiled lisaem_static_resources.cpp " $CXX $ARCH $CXXFLAGS -c lisaem_static_resources.cpp -o ${TLD}/obj/lisaem_static_resources.o 1>&2
   waitqall
 fi
 
@@ -852,10 +830,6 @@ if  [[ -f "$LISANAME" ]]; then
 
     if [[ -n "$DARWIN" ]]; then
         echo "* Creating macos application" 1>&2
-        # replace machine type if we overode it
-        if [[ -n "$ARCHOVERRIDE" ]]; then
-           export BINARYEXTENSION="-${ARCHOVERRIDE}-${OSMAJOR}.${OSMIDDLE}"
-        fi
         CONTENTS="${TLD}/bin/${SOFTWARE}.app/Contents/"
         RESOURCES="${TLD}/bin/${SOFTWARE}.app/Contents/Resources"
         BIN="${TLD}/bin/${SOFTWARE}.app/Contents/MacOS"
@@ -915,8 +889,6 @@ if  [[ -f "$LISANAME" ]]; then
 
            mkdir -pm755 ./pkg/usr/local/bin     || exit $?
            chmod 755      pkg/usr/local pkg/usr || exit $? # fix inner dir perms
-
-           [[ -n "$ARCHOVERRIDE" ]] && MACHINE="$ARCHOVERRIDE"
 
            TOOLLIST="patchxenix blu-to-dc42  dc42-resize-to-400k  dc42-dumper  lisadiskinfo  lisafsh-tool dc42-copy-boot-loader lisa-serial-info los-bozo-on los-deserialize idefile-to-dc42 rraw-to-dc42"
            mv ${TOOLLIST} "${TLD}/bin/${MACOSX_MAJOR_VER}/pkg/usr/local/bin/" || exit $?

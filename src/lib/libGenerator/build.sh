@@ -151,18 +151,8 @@ for j in $@; do
     ;;
 #DEBUG DEBUGMEMCALLS IPC_COMMENTS
 
-  -64|--64|-m64)                export SIXTYFOURBITS="--64"; 
-                                export THIRTYTWOBITS="";
-                                export ARCH="-m64"; export SARCH="-m64"   ;;
-
-  -32|--32|-m32)                export SIXTYFOURBITS=""; 
-                                export THIRTYTWOBITS="--32"; 
-                                [[ "$MACHINE" == "x86_64" ]] && export MACHINE="i386"
-                                export ARCH="-m32"; export SARCH="-m32"   ;;
-
-  -march=*)                     export ARCH="${opt} $ARCH"                ;;
-  -arch=*)                      export ARCH="$(echo ${opt} | sed -e 's/=/ /g') $ARCH"
-                                export SARCH="${opt} $SARCH"              ;;
+  -64|--64|-m64|-32|--32|-m32|-march=*|-arch=*)
+                                echo "Architecture options are no longer supported. Building for native arm64 only." 1>&2 ;;
 
   --no-debug)                   WITHDEBUG=""
                                 WARNINGS=""                               ;;
@@ -290,16 +280,13 @@ DEPS=0
 [[ "$DEPS" -eq 0 ]] && if needed ../include/generator.h  ../obj/cpu68k-f.o; then  DEPS=1;fi
 
 
-export CFLAGS="$ARCH $CFLAGS $NOWARNFORMATTRUNC $NOUNKNOWNWARNING $EXTRADEFINES"
+export CFLAGS="$CFLAGS $NOWARNFORMATTRUNC $NOUNKNOWNWARNING $EXTRADEFINES"
 
 if [[ "$DEPS" -gt 0 ]] ######################################################################
 then
 
-  # when cross compiling, we need def68k and gen68k to be native as they generate C code locally
-  # on macos x 10.5 rosetta works from i386 on ppc, but not here.
-
+  # Build tools (def68k, gen68k) also need arm64 — macOS can run arm64 from x86_64 processes
   export ZARCH="$ARCH"
-  [[ -n "$DARWIN" && "$OSVER" > "11.0" ]] && [[ "$OMACHINE" == "x86_64" || "$OMACHINE" == "arm64" ]] && export ZARCH="   -m64 -arch x86_64 -arch arm64   "
 
   export COMPILEPHASE="gen"
   export PERCENTJOB=0 NUMJOBSINPHASE=24
@@ -359,7 +346,7 @@ for src in cpu68k reg68k diss68k ui_log; do
     #only compile what we need, unlike ./cpu68k this is less sensitive
     if needed ${src}.c ../obj/${src}.o
     then
-      qjob "!!  Compiled ${src}.c..." $CC $WITHDEBUG $WITHTRACE $INC $ARCH $CFLAGS -c ${src}.c -o ../obj/${src}.o|| exit 1
+      qjob "!!  Compiled ${src}.c..." $CC $WITHDEBUG $WITHTRACE $INC $CFLAGS $ARCH -c ${src}.c -o ../obj/${src}.o|| exit 1
       COMPILED="yes"
     fi
 done
