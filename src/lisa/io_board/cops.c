@@ -39,6 +39,8 @@
 #include <vars.h>
 #include <keyscan.h>
 #include <keytable.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 // Older COPS behavior is to send keyboard unplugged signal before keyboard id,
 // and mouse unplugged signal before mouse plugged signal on a reset.
@@ -61,6 +63,16 @@ static int   keyboard_keytronix=1;      // need to recode this as user editable
 // while debugging is enabled, so I can see where mouse x,y is stored.
 //
 int mouse_keys_enabled=0, mouse_keys_x=0, mouse_keys_y=0;
+
+static int mouse_dbg_enabled_cache = -1;
+static int mouse_dbg_enabled(void)
+{
+    if (mouse_dbg_enabled_cache < 0) {
+        const char *env = getenv("LISA_MOUSEDBG");
+        mouse_dbg_enabled_cache = (env && env[0] && env[0] != '0') ? 1 : 0;
+    }
+    return mouse_dbg_enabled_cache;
+}
 
 // duplicated from VIA:
 #define  VIA_CLEAR_IRQ_PORT_A(x) { if (((via[x].via[PCR]>>1) & 7)!=1 &&                                      \
@@ -1149,6 +1161,12 @@ void add_mouse_event(int16 x, int16 y, int8 button)
     mousequeue[mousequeuelen].x=x; 
     mousequeue[mousequeuelen].y=y; 
     mousequeue[mousequeuelen].button=button;
+    if (mouse_dbg_enabled()) {
+        fprintf(stderr,
+                "[MOUSEDBG_CORE_ORIG] add x=%d y=%d b=%d cq=%d mq=%d cm=%d clk=%llu\n",
+                (int)x, (int)y, (int)button, (int)copsqueuelen, (int)mousequeuelen, (int)cops_mouse,
+                (unsigned long long)cpu68k_clocks);
+    }
 
 //    if (button ==-1 ) ALERT_LOG(0,"button released added to queue");
 //    if (button == 1 ) ALERT_LOG(0,"button down added to queue");
@@ -1191,6 +1209,16 @@ void seek_mouse_event(void)
 
   dx=mousequeue[1].x-(int16)(ratx);
   dy=mousequeue[1].y-(int16)(raty);
+  if (mouse_dbg_enabled()) {
+      fprintf(stderr,
+              "[MOUSEDBG_CORE_ORIG] seek rat=(%u,%u) q1=(%d,%d b=%d) dx=%d dy=%d pend=(%d,%d) cq=%d mq=%d cm=%d clk=%llu\n",
+              (unsigned int)ratx, (unsigned int)raty,
+              (int)mousequeue[1].x, (int)mousequeue[1].y, (int)mousequeue[1].button,
+              (int)dx, (int)dy,
+              (int)mouse_pending_x, (int)mouse_pending_y,
+              (int)copsqueuelen, (int)mousequeuelen, (int)cops_mouse,
+              (unsigned long long)cpu68k_clocks);
+  }
   DEBUG_LOG(0,"ratx,y: %d,%d mousequeue:%d,%d dx,dy",ratx,raty,mousequeue[1].x,mousequeue[1].y,dx,dy);
 
   abort_opcode=xabort_opcode;

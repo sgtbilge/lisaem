@@ -30,6 +30,7 @@
 #include <wx/config.h>
 #include <wx/fileconf.h>
 #include <wx/stdpaths.h>
+#include <stdlib.h>
 
 #include <machine.h>
 #include <LisaConfig.h>
@@ -63,6 +64,18 @@ extern "C"
 }
 
 extern char *getDocumentsDir(void);
+
+static int bootdbg_enabled_cached = -1;
+
+static int bootdbg_is_enabled(void)
+{
+   if (bootdbg_enabled_cached == -1)
+   {
+      const char *v = getenv("LISA_BOOTDBG");
+      bootdbg_enabled_cached = (v && *v && *v != '0') ? 1 : 0;
+   }
+   return bootdbg_enabled_cached;
+}
 
 
 void LisaConfig::Load(wxFileConfig *config, uint8 *floppy_ram)
@@ -145,6 +158,26 @@ void LisaConfig::Load(wxFileConfig *config, uint8 *floppy_ram)
 
    config->Read(_T("/ROMFILE"), &rompath);
    config->Read(_T("/DUALPARALLELROM"), &dualrom);
+
+   if (bootdbg_is_enabled())
+   {
+      fprintf(
+         stderr,
+         "[BOOTCFG_ORIG] memkb=%ld hle=%d cheat=%d iorom=%02x kbid=%04lx serial=%s parallel=%s profile=%s rom=%s dualrom=%s sA=%s sB=%s\n",
+         (long)mymaxlisaram,
+         (int)hle,
+         (int)cheat_ram_test,
+         (unsigned int)(floppy_iorom & 0xff),
+         (unsigned long)(kbid & 0xffff),
+         (const char *)(myserial.mb_str(wxConvUTF8)),
+         (const char *)(parallel.mb_str(wxConvUTF8)),
+         (const char *)(parallelp.mb_str(wxConvUTF8)),
+         (const char *)(rompath.mb_str(wxConvUTF8)),
+         (const char *)(dualrom.mb_str(wxConvUTF8)),
+         (const char *)(serial1_setting.mb_str(wxConvUTF8)),
+         (const char *)(serial2_setting.mb_str(wxConvUTF8))
+      );
+   }
 
 
    // Load parameter memory if inside ini file, else we'll load pram.bin later.
@@ -289,4 +322,3 @@ void LisaConfig::Save(wxFileConfig *config, uint8 *floppy_ram)
 
    config->Flush();
   }
-

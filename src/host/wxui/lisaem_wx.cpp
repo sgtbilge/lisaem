@@ -144,6 +144,7 @@
 #include <wx/artprov.h>
 #include <wx/toolbar.h>
 #include <terminalwx.h>
+#include <stdlib.h>
 
 
 // RAW_BITMAP_ACCESS should be used in most cases as it proves much higher performance
@@ -315,6 +316,101 @@ static double on_start_zoom=0.0;
 
 wxString   on_start_lisaconfig="",
            on_start_floppy="";
+
+static int bootdbg_enabled_cached = -1;
+static unsigned int bootdbg_last_os = 0xffffffffu;
+static unsigned int bootdbg_last_st = 0xffffffffu;
+static unsigned int bootdbg_last_me = 0xffffffffu;
+static unsigned int bootdbg_last_se = 0xffffffffu;
+static unsigned int bootdbg_last_he = 0xffffffffu;
+static unsigned int bootdbg_last_ifr1 = 0xffffffffu;
+static unsigned int bootdbg_last_ier1 = 0xffffffffu;
+static unsigned int bootdbg_last_ifr2 = 0xffffffffu;
+static unsigned int bootdbg_last_ier2 = 0xffffffffu;
+static int bootdbg_last_cq = -9999;
+static int bootdbg_last_mq = -9999;
+static int bootdbg_last_cm = -9999;
+
+static int bootdbg_is_enabled(void)
+{
+    if (bootdbg_enabled_cached == -1)
+    {
+        const char *v = getenv("LISA_BOOTDBG");
+        bootdbg_enabled_cached = (v && *v && *v != '0') ? 1 : 0;
+    }
+    return bootdbg_enabled_cached;
+}
+
+static void bootdbg_log_if_changed(void)
+{
+    if (!bootdbg_is_enabled()) return;
+
+    const unsigned int os   = (unsigned int)running_lisa_os;
+    const unsigned int st   = (unsigned int)statusregister;
+    const unsigned int me   = (unsigned int)memerror;
+    const unsigned int se   = (unsigned int)softmemerror;
+    const unsigned int he   = (unsigned int)harderror;
+    const unsigned int ifr1 = (unsigned int)via[1].via[IFR];
+    const unsigned int ier1 = (unsigned int)via[1].via[IER];
+    const unsigned int ifr2 = (unsigned int)via[2].via[IFR];
+    const unsigned int ier2 = (unsigned int)via[2].via[IER];
+    const int cq            = (int)copsqueuelen;
+    const int mq            = (int)mousequeuelen;
+    const int cm            = (int)cops_mouse;
+
+    if (os   == bootdbg_last_os   &&
+        st   == bootdbg_last_st   &&
+        me   == bootdbg_last_me   &&
+        se   == bootdbg_last_se   &&
+        he   == bootdbg_last_he   &&
+        ifr1 == bootdbg_last_ifr1 &&
+        ier1 == bootdbg_last_ier1 &&
+        ifr2 == bootdbg_last_ifr2 &&
+        ier2 == bootdbg_last_ier2 &&
+        cq   == bootdbg_last_cq   &&
+        mq   == bootdbg_last_mq   &&
+        cm   == bootdbg_last_cm)
+    {
+        return;
+    }
+
+    bootdbg_last_os = os;
+    bootdbg_last_st = st;
+    bootdbg_last_me = me;
+    bootdbg_last_se = se;
+    bootdbg_last_he = he;
+    bootdbg_last_ifr1 = ifr1;
+    bootdbg_last_ier1 = ier1;
+    bootdbg_last_ifr2 = ifr2;
+    bootdbg_last_ier2 = ier2;
+    bootdbg_last_cq = cq;
+    bootdbg_last_mq = mq;
+    bootdbg_last_cm = cm;
+
+    fprintf(
+        stderr,
+        "[BOOTDBG_ORIG] pc=%08x pc24=%08x os=%u clk=%llu d1=%u d2=%u st=%08x me=%04x se=%u he=%u cq=%d mq=%d cm=%d ce=%lld ifr1=%02x ier1=%02x ifr2=%02x ier2=%02x\n",
+        (unsigned int)reg68k_pc,
+        (unsigned int)pc24,
+        os,
+        (unsigned long long)cpu68k_clocks,
+        (unsigned int)diag1,
+        (unsigned int)diag2,
+        st,
+        me,
+        se,
+        he,
+        cq,
+        mq,
+        cm,
+        (long long)cops_event,
+        ifr1,
+        ier1,
+        ifr2,
+        ier2
+    );
+    fflush(stderr);
+}
 
 
 
@@ -1627,6 +1723,7 @@ int LisaEmFrame::EmulateLoop(long idleentry)
             }
 
             get_next_timer_event();                           // handle any pending IRQ's/timer prep work            
+            bootdbg_log_if_changed();
                                                               // if we need to, refresh the display
 #ifndef __WXOSX__
             if (now-lastcrtrefresh>refresh_rate_used)         // OS X, esp slower PPC's suffer if we use the if statement
@@ -5262,6 +5359,18 @@ void LisaWin::OnMouseMove(wxMouseEvent &event)
              int b=0;
              if (event.LeftUp()) b=-1;
              if (event.LeftDown()) b=1;
+             {
+               const char *mdbg=getenv("LISA_MOUSEDBG");
+               if (mdbg && mdbg[0] && mdbg[0]!='0') {
+                 fprintf(stderr,
+                         "[MOUSEDBG_HOST_WX] pos=(%d,%d) xh=%ld yh=%ld lisa=(%ld,%ld) b=%d use_scale=%d mouse_scale=%.4f in_crt=%d\n",
+                         (int)pos.x, (int)pos.y,
+                         xh, yh, x, y, b,
+                         my_lisaframe->use_mouse_scale,
+                         (double)mouse_scale,
+                         mouse_in_crt);
+               }
+             }
              add_mouse_event(x,y, b );
           }
           seek_mouse_event();

@@ -1259,6 +1259,15 @@ void floppy_go6504(void)
                 }
 
             ALERT_LOG(0,"Attempt to execute unrecognized 6504 code");
+            ALERT_LOG(0,"floppy unknown cmd=%02x fn=%02x drive=%02x intmask=%02x intstat=%02x pc=%d/%08x clk=%llu",
+                      floppy_ram[0x00],
+                      floppy_ram[0x01],
+                      floppy_ram[0x02],
+                      floppy_ram[FLOP_INT_MASK],
+                      floppy_ram[FLOP_INT_STAT],
+                      context,
+                      pc24,
+                      (unsigned long long)cpu68k_clocks);
             #ifdef DEBUG
             debug_on("Unrecognized 6504 code");
             #endif 
