@@ -4,24 +4,29 @@
 #                                                #
 ##################################################
 
-   export WHICHWXCONFIG="$( which wx-config )"
+   if [[ -x "${TLD}/../wxWidgets-3.2.9/build-cocoa-release/wx-config" ]]; then
+      export WHICHWXCONFIG="${TLD}/../wxWidgets-3.2.9/build-cocoa-release/wx-config"
+   else
+      export WHICHWXCONFIG="$( which wx-config )"
+   fi
+
    if [[ -z "$WHICHWXCONFIG" ]]; then
       echo "Could not find wx-config command for wx-widgets" 1>&2
       exit 8
    fi
 
-   export        WXVERSION="$(wx-config --version)"
-   export WXCONFIGCPPFLAGS="$(wx-config --cppflags )"
-   export WXCONFIGCXXFLAGS="$(wx-config --cxxflags )"
-   export   WXCONFIGCFLAGS="$(wx-config --cflags   )"
-   export     WXCONFIGLIBS="$(wx-config $STATIC  --libs --linkdeps --cppflags)"
+   export        WXVERSION="$($WHICHWXCONFIG --version)"
+   export WXCONFIGCPPFLAGS="$($WHICHWXCONFIG --cppflags )"
+   export WXCONFIGCXXFLAGS="$($WHICHWXCONFIG --cxxflags )"
+   export   WXCONFIGCFLAGS="$($WHICHWXCONFIG --cflags   )"
+   export     WXCONFIGLIBS="$($WHICHWXCONFIG $STATIC  --libs --linkdeps --cppflags)"
 
-   [[ -z "$CC"  ]] && export  CC="$(wx-config --cc)"
-   [[ -z "$LD"  ]] && export  LD="$(wx-config --ld)"
-   [[ -z "$CXX" ]] && export CXX="$(wx-config --cxx)"
+   [[ -z "$CC"  ]] && export  CC="$($WHICHWXCONFIG --cc)"
+   [[ -z "$LD"  ]] && export  LD="$($WHICHWXCONFIG --ld)"
+   [[ -z "$CXX" ]] && export CXX="$($WHICHWXCONFIG --cxx)"
 
    export   CFLAGS="$WXCONFIGCFLAGS $CFLAGS "
    export CPPFLAGS="$WXCONFIGCPPFLAGS $CPPFLAGS "
-   export CXXFLAGS="$WXCONFIGCXXFLAGS $CXXFLAGS  $(wx-config --version | sed -e 's/\.//g' -e 's/^/-DWXVER=/g' )"
+   export CXXFLAGS="$WXCONFIGCXXFLAGS $CXXFLAGS  $($WHICHWXCONFIG --version | sed -e 's/\.//g' -e 's/^/-DWXVER=/g' )"
 
-   export LIBS="$LIBS $(wx-config --libs) $LIBS "
+   export LIBS="$LIBS $($WHICHWXCONFIG --libs) $LIBS "

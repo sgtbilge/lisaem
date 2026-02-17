@@ -1601,18 +1601,8 @@ extern "C" void close_all_terminals(void);
 // if we close the LisaEm window and another window such as preferences or a terminal is open, we get segfault
 void LisaEmFrame::OnClose(wxCloseEvent& event)
 {
-  /*
-  if (my_LisaConfigFrame) // close any ConfigFrame 
-     {
-       my_LisaConfigFrame->Hide();
-       my_LisaConfigFrame->Close();
-       delete my_LisaConfigFrame; my_LisaConfigFrame=NULL;
-       close_all_terminals();
-     }
-  Destroy();
-  */
-  wxCommandEvent foo;
-  OnQuit(foo);
+    wxCommandEvent foo;
+    OnQuit(foo);
 }
 
 void LisaEmFrame::FloppyAnimation(void)
@@ -5593,36 +5583,34 @@ void LisaEmFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
     EXTERMINATE(my_poweronDC           );
     EXTERMINATE(my_poweroffDC          );
 
-    if (my_lisaframe)                                    // prevent segfault here
-        if (my_lisaframe->m_emulation_timer) 
-            my_lisaframe->m_emulation_timer->Stop();     // stop the timer
+    if (m_emulation_timer) 
+    {
+        m_emulation_timer->Stop();
+    }
 
-    #ifdef __WXOSX__
-     wxMilliSleep(emulation_time*2);              // ensure that any pending timer events are allowed to finish
-     if (my_lisaframe) EXTERMINATE(my_lisaframe->m_emulation_timer);
-     if (my_LisaConfigFrame) // close any ConfigFrame 
-        {
-          my_LisaConfigFrame->Hide();
-          my_LisaConfigFrame->Close();
-          delete my_LisaConfigFrame; my_LisaConfigFrame=NULL;
-        }  
-     Destroy();                                      // and bye bye we go.
-    #else
-     if (my_LisaConfigFrame)                       // close any ConfigFrame 
-        {
-          my_LisaConfigFrame->Hide();
-          my_LisaConfigFrame->Close();
-          delete my_LisaConfigFrame; my_LisaConfigFrame=NULL;
-        }  
-      wxMilliSleep(750);
-      if (my_lisaframe) EXTERMINATE(my_lisaframe->m_emulation_timer);
-      wxMilliSleep(250);
+    if (my_LisaConfigFrame)
+    {
+        my_LisaConfigFrame->Hide();
+        my_LisaConfigFrame->Close();
+        delete my_LisaConfigFrame;
+        my_LisaConfigFrame = NULL;
+    }
 
+    close_all_terminalwx();
 
-      close_all_terminalwx();
-      EXTERMINATE(my_lisaframe);
-      wxExit();
-    #endif
+#ifdef __WXOSX__
+    wxMilliSleep(emulation_time * 2);
+#else
+    wxMilliSleep(1000);
+#endif
+
+    if (m_emulation_timer)
+    {
+        delete m_emulation_timer;
+        m_emulation_timer = NULL;
+    }
+
+    Destroy();
 }
 
 extern "C" void on_lisa_exit(void) {
@@ -8024,18 +8012,18 @@ extern "C" void sound_play(uint16 t2)
     my_lisaframe->lastclk=cpu68k_clocks;
 
 #ifdef DEBUG
-    if ((iorom & 0xa0)==0xa0) { // check for A8 IOROM
-      if      (t2== ((0x20 >>2) + 0x20) ) ALERT_LOG(0,"HIPTCH 0x28 Lisa 2/5 A8 ROM");
-      else if (t2== ((0x60 >>2) + 0x60) ) ALERT_LOG(0,"LOPTCH 0x78 Lisa 2/5 A8 ROM");
-      else if (t2== ((0xa0 >>2) + 0xa0) ) ALERT_LOG(0,"CLICK  0xc8 Lisa 2/5 A8 ROM");
-      else                                ALERT_LOG(0,"Other sound freq: %02x for Lisa 2/5 A8 ROM (28=high, 78=low)",t2);
+    if ((floppy_iorom & 0xa0)==0xa0) { // check for A8 IOROM
+      if      (t2== ((0x20 >>2) + 0x20) ) { ALERT_LOG(0,"HIPTCH 0x28 Lisa 2/5 A8 ROM"); }
+      else if (t2== ((0x60 >>2) + 0x60) ) { ALERT_LOG(0,"LOPTCH 0x78 Lisa 2/5 A8 ROM"); }
+      else if (t2== ((0xa0 >>2) + 0xa0) ) { ALERT_LOG(0,"CLICK  0xc8 Lisa 2/5 A8 ROM"); }
+      else                                { ALERT_LOG(0,"Other sound freq: %02x for Lisa 2/5 A8 ROM (28=high, 78=low)",t2); }
     }
     else
     {
-      if      (t2==(0x20))                ALERT_LOG(0,"HIPTCH 0x20 Lisa 2/10 88 ROM");
-      else if (t2==(0x60))                ALERT_LOG(0,"LOPTCH 0x60 Lisa 2/10 88 ROM");
-      else if (t2==(0xa0))                ALERT_LOG(0,"CLICK  0xa0 Lisa 2/10 88 ROM");
-      else                                ALERT_LOG(0,"Other sound freq: %02x for Lisa 2/10 88 ROM (20=high, 60=low)",t2);
+      if      (t2==(0x20))                { ALERT_LOG(0,"HIPTCH 0x20 Lisa 2/10 88 ROM"); }
+      else if (t2==(0x60))                { ALERT_LOG(0,"LOPTCH 0x60 Lisa 2/10 88 ROM"); }
+      else if (t2==(0xa0))                { ALERT_LOG(0,"CLICK  0xa0 Lisa 2/10 88 ROM"); }
+      else                                { ALERT_LOG(0,"Other sound freq: %02x for Lisa 2/10 88 ROM (20=high, 60=low)",t2); }
     }
 #endif
 
