@@ -147,7 +147,8 @@ enum
 
     ID_TOOLBAR_POWER,
     ID_TOOLBAR_FLOPPY,
-    ID_TOOLBAR_FLOPPY_NEW
+    ID_TOOLBAR_FLOPPY_NEW,
+    ID_TOOLBAR_PROFILE
 };
 
 enum
@@ -326,6 +327,7 @@ public:
     void OnToolbarPower(wxCommandEvent& event);
     void OnToolbarFloppy(wxCommandEvent& event);
     void OnToolbarFloppyNew(wxCommandEvent& event);
+    void OnToolbarProfile(wxCommandEvent& event);
 
     void insert_floppy_anim(wxString openfile);
 

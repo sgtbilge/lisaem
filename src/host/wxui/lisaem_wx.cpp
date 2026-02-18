@@ -283,6 +283,7 @@ wxFileStream      *pConfigIS;            // config file
 
 
 LisaConfigFrame  *my_LisaConfigFrame=NULL;
+static wxToolBar *g_toolbar=NULL;
 
 /*************************************************************************************************************************************/
 
@@ -650,6 +651,7 @@ BEGIN_EVENT_TABLE(LisaEmFrame, wxFrame)
     EVT_MENU(ID_TOOLBAR_POWER,       LisaEmFrame::OnToolbarPower)
     EVT_MENU(ID_TOOLBAR_FLOPPY,      LisaEmFrame::OnToolbarFloppy)
     EVT_MENU(ID_TOOLBAR_FLOPPY_NEW,  LisaEmFrame::OnToolbarFloppyNew)
+    EVT_MENU(ID_TOOLBAR_PROFILE,     LisaEmFrame::OnToolbarProfile)
 
     EVT_MENU(ID_PROFILEPWR,      LisaEmFrame::OnProFilePower)
 
@@ -1105,6 +1107,7 @@ DISPLAYUPDATE(2, "\rRead : %i MB  ==> %.2f%%   ",
 #endif
 
 void update_menu_checkmarks(void);
+void update_toolbar_button_states(void);
 
 
 
@@ -1287,6 +1290,7 @@ void LisaEmFrame::VidRefresh(long now)
 
     screen_paint_update++;                                       // used to figure out effective host refresh rate
     lastrefresh=cpu68k_clocks;
+    update_toolbar_button_states();
     seek_mouse_event();
 }
 
@@ -2080,6 +2084,19 @@ void LisaEmFrame::OnToolbarFloppy(wxCommandEvent& WXUNUSED(event))
 void LisaEmFrame::OnToolbarFloppyNew(wxCommandEvent& WXUNUSED(event))
 {
     OnxNewFLOPPY();
+}
+
+void LisaEmFrame::OnToolbarProfile(wxCommandEvent& WXUNUSED(event))
+{
+    if (running != emulation_off || (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON)))
+    {
+        wxMessageBox(_T("Power down the Lisa before changing ProFile drive configuration."),
+                     _T("Profile Drive Locked"), wxICON_INFORMATION | wxOK);
+        return;
+    }
+
+    wxCommandEvent cfgEvent;
+    OnConfig(cfgEvent);
 }
 
 
@@ -4681,6 +4698,7 @@ void handle_powerbutton(void)
             ret=initialize_all_subsystems();
             if  (!ret)
                 {
+                  profile_power=127;
                   my_lisawin->powerstate|= POWER_NEEDS_REDRAW | POWER_ON;
                   my_lisaframe->running=emulation_running; 
                   my_lisaframe->runtime.Start(0);
@@ -4703,6 +4721,7 @@ void handle_powerbutton(void)
         ALERT_LOG(0,"===============================");
 
         my_lisaframe->UpdateProfileMenu();
+        update_toolbar_button_states();
 
         ALERT_LOG(0,"======== EXIT ================");
         ALERT_LOG(0,"powerstate: %d",my_lisawin->powerstate);
@@ -4727,6 +4746,9 @@ extern "C" void lisa_powered_off(void)
   on_startup_actions_done=0;                        // reset
 
   unvars();                                         // reset global vars
+  profile_power=0;                                  // keep ProFile drives powered down after shutdown
+  my_lisaframe->soundplaying=0;
+  wxSound::Stop();                                  // stop any lingering looped drive/speaker sound
 // can't debug in windows since LisaEm is not a console app, so redirect buglog to an actual file.
 // call to unvars resets this to null, so reopen it
 #if defined(__WXMSW__)    && defined(DEBUG) 
@@ -4738,6 +4760,8 @@ extern "C" void lisa_powered_off(void)
 
   my_lisawin->powerstate= POWER_NEEDS_REDRAW | POWER_OFF;
   flushscreen();
+  my_lisaframe->UpdateProfileMenu();
+  update_toolbar_button_states();
   ALERT_LOG(0,"The Lisa has powered off powerstate:%d",my_lisawin->powerstate);         // status
 
   setstatusbar("The Lisa has powered off");         // status
@@ -5500,6 +5524,102 @@ extern "C" int yesnomessagebox(char *s, char *t)  // messagebox string of text, 
 // this way all the menus get updated from a single place whenever needed,
 // not including the profile menu here as that's special
 // Byte my shiny metal C function!
+void update_toolbar_button_states(void)
+{
+  if (!g_toolbar || !my_lisaframe || !my_lisawin) return;
+
+  const int tbsz = MAX(g_toolbar->GetToolBitmapSize().GetWidth(), 16);
+  const int power_on = ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON) ? 1 : 0;
+  const int floppy_attached = ((my_lisawin->floppystate & FLOPPY_ANIM_MASK) != FLOPPY_EMPTY) ? 1 : 0;
+  const int floppy_io_active = floppy_FDIR ? 1 : 0;
+  const int floppy_fn = (int)floppy_ram[1]; // controller FUNCTION register
+  const int floppy_writing = (floppy_io_active && (floppy_fn == 0x01 || floppy_fn == 0x08)) ? 1 : 0; // write/writx
+  const int profile_editable = (my_lisaframe->running == emulation_off) ? 1 : 0;
+
+  static int last_power_on = -1;
+  static int last_floppy_attached = -1;
+  static int last_floppy_io_active = -1;
+  static int last_floppy_writing = -1;
+  static int last_profile_editable = -1;
+  bool changed = false;
+
+  if (power_on != last_power_on)
+  {
+      wxBitmap powerBmp(tbsz, tbsz);
+      wxMemoryDC dc(powerBmp);
+      dc.SetBackground(*wxBLACK_BRUSH);
+      dc.Clear();
+      wxColour pcol = power_on ? wxColour(0, 210, 0) : wxColour(120, 40, 40);
+      dc.SetBrush(wxBrush(pcol));
+      dc.SetPen(wxPen(pcol));
+      dc.DrawCircle(tbsz/2, tbsz/2, tbsz/3);
+      dc.SelectObject(wxNullBitmap);
+
+      g_toolbar->SetToolNormalBitmap(ID_TOOLBAR_POWER, powerBmp);
+      g_toolbar->SetToolShortHelp(ID_TOOLBAR_POWER, power_on ? wxT("Power is ON") : wxT("Power is OFF"));
+      last_power_on = power_on;
+      changed = true;
+  }
+
+  if (floppy_attached != last_floppy_attached ||
+      floppy_io_active != last_floppy_io_active ||
+      floppy_writing != last_floppy_writing)
+  {
+      wxColour body(80,80,220); // empty/default
+      wxString ioState = wxT("Idle");
+      if (floppy_attached) body = wxColour(90,180,90);
+      if (floppy_io_active && !floppy_writing) { body = wxColour(220,180,60); ioState = wxT("Reading"); }
+      if (floppy_io_active && floppy_writing)  { body = wxColour(220,80,80);  ioState = wxT("Writing"); }
+
+      wxBitmap floppyBmp(tbsz, tbsz);
+      wxMemoryDC dc(floppyBmp);
+      dc.SetBackground(*wxBLACK_BRUSH);
+      dc.Clear();
+      dc.SetBrush(wxBrush(body));
+      dc.SetPen(wxPen(body));
+      dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
+      dc.SetPen(wxPen(*wxWHITE, 2));
+      dc.DrawLine(tbsz/2, tbsz/4, tbsz/2, tbsz*3/4);
+      dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
+      dc.SelectObject(wxNullBitmap);
+
+      g_toolbar->SetToolNormalBitmap(ID_TOOLBAR_FLOPPY, floppyBmp);
+      g_toolbar->SetToolShortHelp(ID_TOOLBAR_FLOPPY,
+                                  wxString::Format(wxT("Diskette: %s, I/O: %s"),
+                                                   floppy_attached ? wxT("Attached") : wxT("Empty"),
+                                                   ioState));
+      last_floppy_attached = floppy_attached;
+      last_floppy_io_active = floppy_io_active;
+      last_floppy_writing = floppy_writing;
+      changed = true;
+  }
+
+  if (profile_editable != last_profile_editable)
+  {
+      wxBitmap profileBmp(tbsz, tbsz);
+      wxMemoryDC dc(profileBmp);
+      dc.SetBackground(*wxBLACK_BRUSH);
+      dc.Clear();
+      wxColour pcol = profile_editable ? wxColour(180,120,60) : wxColour(80,80,80);
+      dc.SetBrush(wxBrush(pcol));
+      dc.SetPen(wxPen(pcol));
+      dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
+      dc.SetPen(wxPen(*wxWHITE, 2));
+      dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
+      dc.SelectObject(wxNullBitmap);
+
+      g_toolbar->SetToolNormalBitmap(ID_TOOLBAR_PROFILE, profileBmp);
+      g_toolbar->EnableTool(ID_TOOLBAR_PROFILE, profile_editable != 0);
+      g_toolbar->SetToolShortHelp(ID_TOOLBAR_PROFILE,
+                                  profile_editable ? wxT("Configure ProFile drives")
+                                                   : wxT("Power off Lisa to configure ProFile drives"));
+      last_profile_editable = profile_editable;
+      changed = true;
+  }
+
+  if (changed) g_toolbar->Realize();
+}
+
 void update_menu_checkmarks(void)
 {
   static float lastthrottle;
@@ -5624,6 +5744,8 @@ void update_menu_checkmarks(void)
             throttleMenu->Check(ID_ET40_25,      emulation_time== 40 && emulation_tick==25);
             throttleMenu->Check(ID_ET30_20,      emulation_time== 30 && emulation_tick==20);
     }
+
+    update_toolbar_button_states();
 
 
 } // -- end of update_menu_checkmarks(void)
@@ -6315,6 +6437,7 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     ALERT_LOG(0,"Create Toolbar");
     {
         wxToolBar *toolbar = CreateToolBar(wxTB_HORIZONTAL | wxTB_TEXT, wxID_ANY);
+        g_toolbar = toolbar;
         wxSize tsz = toolbar->GetToolBitmapSize();
         int tbsz = (tsz.GetWidth() > 0) ? tsz.GetWidth() : 24;
 
@@ -6345,11 +6468,22 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
           dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
           dc.SelectObject(wxNullBitmap);
         }
+        // Profile: amber rectangle with white bar
+        wxBitmap profileBmp(tbsz, tbsz);
+        { wxMemoryDC dc(profileBmp);
+          dc.SetBackground(*wxBLACK_BRUSH); dc.Clear();
+          dc.SetBrush(wxBrush(wxColour(180,120,60))); dc.SetPen(wxPen(wxColour(180,120,60)));
+          dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
+          dc.SetPen(wxPen(*wxWHITE, 2));
+          dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
+          dc.SelectObject(wxNullBitmap);
+        }
 
         toolbar->AddTool(ID_TOOLBAR_POWER,       wxT("Power"),       powerBmp,     wxT("Toggle Power"));
         toolbar->AddSeparator();
         toolbar->AddTool(ID_TOOLBAR_FLOPPY,      wxT("Insert Disk"), floppyBmp,    wxT("Insert a disk image"));
         toolbar->AddTool(ID_TOOLBAR_FLOPPY_NEW,  wxT("New Disk"),    newFloppyBmp, wxT("Create and insert a blank disk image"));
+        toolbar->AddTool(ID_TOOLBAR_PROFILE,     wxT("Profile"),     profileBmp,   wxT("Configure ProFile drives (Lisa must be off)"));
         toolbar->Realize();
     }
 

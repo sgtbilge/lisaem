@@ -37,7 +37,7 @@ fi
     STABILITY="EXPERIMENTAL-ARM64"        # DEVELOP, ALPHA, BETA, RC1, RC2, RC3... 
                                           # RELEASE/PRODUCTION - PRE-* keep short
                                           # snapcraft limits the length of the version
-  RELEASEDATE="2026.02.15"                # release date.  must be YYYY.MM.DD
+  RELEASEDATE="2026.02.18"                # release date.  must be YYYY.MM.DD
        AUTHOR="Ray Arachelian / Gemini CLI (sgtbilge fork)" # name of the author
     AUTHEMAIL="sgtbilge@users.noreply.github.com"        # email address for this software
       COMPANY="sgtbilge"                  # company (vendor for sun pkg)
