@@ -530,6 +530,8 @@ export  PHASE1LIST="\
 
 export  PHASE2INEXT=cpp PHASE2OUTEXT=o PHASE2OBJDIR=obj
 export  PHASE2LIST="\
+        src/core/LisaEmCore:src/core/LisaEmCore.h:src/core/LisaEmUI.h                                                             \
+        src/host/wxui/wxLisaEmUI:src/host/wxui/wxLisaEmUI.h:src/core/LisaEmUI.h                                                   \
         src/host/wxui/lisaem_wx:src/include/vars.h:src/host/wxui/include/LisaConfig.h:src/host/wxui/include/LisaConfigFrame.h:src/host/wxui/include/LisaSkin.h:./src/printer/imagewriter/include/imagewriter-wx.h                                                  \
         src/host/wxui/LisaConfig:src/host/wxui/include/LisaConfig.h \
         src/host/wxui/LisaConfigFrame:src/host/wxui/include/LisaConfigFrame.h \
