@@ -6,7 +6,7 @@
 # you'll need to change it to fit your purposes.
 #
 # i.e. this assumes LisaEm is in /home/$USER/code/lisaem-1.2.7 which
-# will vary on your system or may go out of date when 1.2.8 is released,
+# will vary on your system or may go out of date when 1.2.9 is released,
 # etc.
 
 TAR=lisaem-1.2.7.tar

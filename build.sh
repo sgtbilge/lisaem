@@ -33,7 +33,7 @@ fi
      SOFTWARE="LisaEm"                    # name of the software (can contain upper case)
        LCNAME="lisaem-arm64"              # lower case name used for the directory
   DESCRIPTION="Experimental derivative of LisaEm for macOS 26.2+ on Apple Silicon"   # description of the package
-          VER="1.2.8"                     # just the version number
+          VER="1.2.9"                     # just the version number
     STABILITY="EXPERIMENTAL-ARM64"        # DEVELOP, ALPHA, BETA, RC1, RC2, RC3... 
                                           # RELEASE/PRODUCTION - PRE-* keep short
                                           # snapcraft limits the length of the version

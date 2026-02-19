@@ -1,8 +1,8 @@
 /**************************************************************************************\
 *                             Apple Lisa 2 Emulator                                    *
 *                                                                                      *
-*              The Lisa Emulator Project  1.2.7-Pre-RC4_2022.02.22                    *
-*                  Copyright (C) 2022 Ray Arachelian                                   *
+*              The Lisa Emulator Project  1.2.9-EXPERIMENTAL-ARM64_2026.02.18                    *
+*                  Copyright (C) 2026 Ray Arachelian / Gemini CLI (sgtbilge fork)                                   *
 *                            All Rights Reserved                                       *
 *                                                                                      *
 *                        Reset Global Variables .c file                                *

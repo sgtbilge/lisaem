@@ -1,6 +1,6 @@
 /**************************************************************************************\
 *                                                                                      *
-*              The Lisa Emulator Project  V1.2.7      RC4 2022.04.01                   *
+*              The Lisa Emulator Project  V1.2.9      RC4 2022.04.01                   *
 *                             http://lisaem.sunder.net                                 *
 *                                                                                      *
 *                  Copyright (C) 1998, 2022 Ray A. Arachelian                          *
@@ -756,6 +756,7 @@ BEGIN_EVENT_TABLE(LisaEmFrame, wxFrame)
     //EVT_IDLE(LisaEmFrame::OnIdleEvent)
     EVT_TIMER(ID_EMULATION_TIMER,LisaEmFrame::OnEmulationTimer)
     EVT_MENU(wxID_EXIT,          LisaEmFrame::OnQuit)
+    EVT_SIZE(                    LisaEmFrame::OnSize)
     EVT_CLOSE(                   LisaEmFrame::OnClose)
 END_EVENT_TABLE()
 
@@ -784,6 +785,69 @@ wxMenu *windowMenu   = NULL;
 LisaConfig       *my_lisaconfig=NULL;
 LisaWin          *my_lisawin=NULL;
 LisaEmFrame      *my_lisaframe=NULL;
+static wxPanel   *g_fullscreen_buttons_panel=NULL;
+static wxButton  *g_fs_btn_power=NULL;
+static wxButton  *g_fs_btn_floppy=NULL;
+static wxButton  *g_fs_btn_newfloppy=NULL;
+static wxButton  *g_fs_btn_profile=NULL;
+static wxButton  *g_fs_btn_exit_fullscreen=NULL;
+static int        g_fullscreen_scale_in_progress=0;
+
+static void compute_fullscreen_layout_metrics(int cw, int ch, int display_w, int display_h,
+                                              int *sidebar_w_out, int *overlay_sidebar_out, float *scale_out)
+{
+    const int sidebar_min = 112;
+    const int sidebar_max = 170;
+
+    if (display_w <= 0) display_w = 720;
+    if (display_h <= 0) display_h = 500;
+    if (cw <= 0) cw = display_w;
+    if (ch <= 0) ch = display_h;
+
+    int overlay_sidebar = 1; // Overlay controls on top of LisaWin; do not shrink viewport width.
+    int sidebar_w = sidebar_min;
+    if (sidebar_w > sidebar_max) sidebar_w = sidebar_max;
+    if (sidebar_w > cw - 60) sidebar_w = cw - 60;
+    if (sidebar_w < 0) sidebar_w = 0;
+
+    // In overlay mode, fit to the full client width. Otherwise reserve sidebar space.
+    float avail_w = (float)(overlay_sidebar ? cw : (cw - sidebar_w));
+    if (avail_w < 1.0f) avail_w = 1.0f;
+    float scale_x = avail_w / (float)display_w;
+    float scale_y = (float)ch / (float)display_h;
+
+    float new_scale = (scale_x < scale_y) ? scale_x : scale_y;
+    {
+        const float fit_w = (avail_w > 1.0f) ? ((avail_w - 1.0f) / (float)display_w) : 0.0f;
+        const float fit_h = (ch > 1) ? (((float)ch - 1.0f) / (float)display_h) : 0.0f;
+        if (fit_w > 0.0f && new_scale > fit_w) new_scale = fit_w;
+        if (fit_h > 0.0f && new_scale > fit_h) new_scale = fit_h;
+    }
+    if (new_scale < 0.25f) new_scale = 0.25f;
+    if (new_scale > 8.0f)  new_scale = 8.0f;
+
+    if (sidebar_w_out) *sidebar_w_out = sidebar_w;
+    if (overlay_sidebar_out) *overlay_sidebar_out = overlay_sidebar;
+    if (scale_out) *scale_out = new_scale;
+}
+
+static void get_layout_display_extent(int *display_w_out, int *display_h_out)
+{
+    int display_w = 720;
+    int display_h = 500;
+
+    switch (lisa_ui_video_mode)
+    {
+        case vidmod_raw: display_h = 364; break;
+        case vidmod_2y:  display_h = 364 * 2; break;
+        case vidmod_3y:  display_w = 720 * 2; display_h = 364 * 3; break;
+        case vidmod_3a:  display_w = 608; display_h = 431; break;
+        default: break; // AA/AAG/HQ35 use 720x500
+    }
+
+    if (display_w_out) *display_w_out = display_w;
+    if (display_h_out) *display_h_out = display_h;
+}
   
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -942,7 +1006,7 @@ ALERT_LOG(0,"building...");
  for (y=0; y<364; y++)
      {
        yoffset[y]=y*90;
-       screen_to_mouse[y]=y;
+       screen_to_mouse[y]=y;    
           screen_y_map[y]=y;
      }
 
@@ -1108,6 +1172,7 @@ DISPLAYUPDATE(2, "\rRead : %i MB  ==> %.2f%%   ",
 
 void update_menu_checkmarks(void);
 void update_toolbar_button_states(void);
+void update_fullscreen_buttons_layout(void);
 
 
 
@@ -2213,57 +2278,63 @@ void LisaEmFrame::OnFullScreen(   wxCommandEvent& WXUNUSED(event))
     if (!FullScreenCheckMenuItem) return; // incase we somehow got here before the menu was built
     ALERT_LOG(0,"processing");
     isfullscreen=FullScreenCheckMenuItem->IsChecked();
-
-    if (isfullscreen)
+    if (isfullscreen == (int)IsFullScreen())
     {
-        // Entering fullscreen: save current scale and compute optimal scale
-        saved_hidpi_scale = hidpi_scale;
-
-        int display_w = o_effective_lisa_vid_size_x;
-        int display_h = o_effective_lisa_vid_size_y;
-        if (display_w <= 0) display_w = 720;
-        if (display_h <= 0) display_h = 500;
-
-        float scale_x = (float)screensizex / (float)display_w;
-        float scale_y = (float)screensizey / (float)display_h;
-        float new_scale = (scale_x < scale_y) ? scale_x : scale_y;
-        // Clamp to reasonable range
-        if (new_scale < 0.25f) new_scale = 0.25f;
-        if (new_scale > 3.0f)  new_scale = 3.0f;
-
-        hidpi_scale = new_scale;
-        set_hidpi_scale();
-        setvideomode(lisa_ui_video_mode);
-    }
-    else
-    {
-        // Leaving fullscreen: restore saved scale
-        hidpi_scale = saved_hidpi_scale;
-        set_hidpi_scale();
-        setvideomode(lisa_ui_video_mode);
+        isfullscreen = !IsFullScreen();
+        FullScreenCheckMenuItem->Check(isfullscreen);
     }
 
-    #if defined(__WXOSX) && !defined(EnableFullScreenView)
-     #define SHOW_MENU_IN_FULLSCREEN 1
-    #endif
+    if (isfullscreen) saved_hidpi_scale = hidpi_scale;
 
-    #if defined(__WXOSX__) && defined(EnableFullScreenView)
-      EnableFullScreenView(!IsFullScreen());
-      ALERT_LOG(0,"macos x enablefullscreen");
-    #else
-      #if !defined(SHOW_MENU_IN_FULLSCREEN) && !defined(__WXOSX__)
-        ShowFullScreen(isfullscreen,wxFULLSCREEN_ALL);
-        ALERT_LOG(0,"showfullscreen");
-      #else
-        ShowFullScreen( isfullscreen,wxFULLSCREEN_NOTOOLBAR | wxFULLSCREEN_NOSTATUSBAR |
-                                      wxFULLSCREEN_NOBORDER  | wxFULLSCREEN_NOCAPTION );
-        ALERT_LOG(0,"ShowFullScreen with options");
-      #endif
+    // Force immersive fullscreen (no frame chrome/tool/status bars).
+    long fullscreen_style = wxFULLSCREEN_NOBORDER | wxFULLSCREEN_NOCAPTION |
+                            wxFULLSCREEN_NOTOOLBAR | wxFULLSCREEN_NOSTATUSBAR;
+    #ifdef wxFULLSCREEN_NOMENUBAR
+    fullscreen_style |= wxFULLSCREEN_NOMENUBAR;
     #endif
+    #ifdef __WXOSX__
+    EnableFullScreenView(true, fullscreen_style);
+    #endif
+    ShowFullScreen(isfullscreen, fullscreen_style);
+    if (GetToolBar())  GetToolBar()->Show(!isfullscreen);
+    if (GetStatusBar()) GetStatusBar()->Show(!isfullscreen);
+    SendSizeEvent();
+    auto apply_fullscreen_layout = [this, isfullscreen]()
+    {
+        if (!my_lisawin) return;
 
-    my_lisawin->clear_skinless=1;
-    update_menu_checkmarks();
-    save_global_prefs();
+        if (isfullscreen)
+        {
+            // Entering fullscreen: defer scale fit until LisaWin has settled client bounds.
+        }
+        else
+        {
+            // Leaving fullscreen: restore saved scale
+            hidpi_scale = saved_hidpi_scale;
+            set_hidpi_scale();
+            setvideomode(lisa_ui_video_mode);
+        }
+
+        update_fullscreen_buttons_layout();
+        my_lisawin->clear_skinless=1;
+        my_lisawin->Refresh(false);
+        update_menu_checkmarks();
+        save_global_prefs();
+    };
+
+    ALERT_LOG(0,"ShowFullScreen immersive");
+    apply_fullscreen_layout();
+    CallAfter([this, apply_fullscreen_layout]()
+    {
+        apply_fullscreen_layout();
+        CallAfter(apply_fullscreen_layout);
+    });
+}
+
+void LisaEmFrame::OnSize(wxSizeEvent& event)
+{
+    if (IsFullScreen()) update_fullscreen_buttons_layout();
+    event.Skip();
 }
 
 // should look into making these C++ templates instead - REFRESHRATE=1s/60Hz
@@ -4386,8 +4457,8 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
   width =rect.GetWidth(); height=rect.GetHeight();  // get region to repaint
 
   GetClientSize(&w_width, &w_height);             // LisaWin's actual drawing area in physical pixels
-  ww_width  = (int)(w_width  / hidpi_scale);      // convert to logical coords (matching dc.SetUserScale)
-  ww_height = (int)(w_height / hidpi_scale);
+  ww_width  = (int)(((double)w_width  / (double)hidpi_scale) + 0.5); // convert to logical coords (matching dc.SetUserScale)
+  ww_height = (int)(((double)w_height / (double)hidpi_scale) + 0.5);
 
   ww_width  = ww_width > w_width  ? w_width  : ww_width;  // limit from going outside the viewport
   ww_height = ww_height> w_height ? w_height : ww_height;
@@ -4409,12 +4480,29 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
           my_memhq3xDC->SetUserScale(1.0,1.0);
           my_memhq3xDC->SetMapMode(wxMM_TEXT);
       }
-      o_effective_lisa_vid_size_x=my_lisahq3xbitmap->GetWidth();
-      o_effective_lisa_vid_size_y=my_lisahq3xbitmap->GetHeight();
   }
 
-  ox=(ww_width  - _H(effective_lisa_vid_size_x) ) / 2;
-  oy=(ww_height - _H(effective_lisa_vid_size_y) ) / 2;
+  // In fullscreen overlay mode, center within the visible area (excluding right sidebar),
+  // otherwise the panel can cover the right edge of the Lisa image.
+  int logical_view_w = ww_width;
+  if (my_lisaframe && my_lisaframe->IsFullScreen())
+  {
+      int fcw = 0, fch = 0;
+      my_lisaframe->GetClientSize(&fcw, &fch);
+      int display_w = 720, display_h = 500;
+      int sidebar_w = 0, overlay_sidebar = 0;
+      get_layout_display_extent(&display_w, &display_h);
+      compute_fullscreen_layout_metrics(fcw, fch, display_w, display_h, &sidebar_w, &overlay_sidebar, NULL);
+      if (overlay_sidebar && sidebar_w > 0)
+      {
+          int logical_sidebar_w = (int)(((double)sidebar_w / (double)hidpi_scale) + 0.5);
+          logical_view_w = ww_width - logical_sidebar_w;
+          if (logical_view_w < 1) logical_view_w = 1;
+      }
+  }
+
+  ox=(logical_view_w - _H(effective_lisa_vid_size_x) ) / 2;
+  oy=(ww_height      - _H(effective_lisa_vid_size_y) ) / 2;
 
   if (ox<0 || (!skinless_center) ) ox=0;
   if (oy<0 || (!skinless_center) ) oy=0;
@@ -4833,11 +4921,11 @@ void LisaWin::OnMouseMove(wxMouseEvent &event)
               //my_lisaframe->ShowFullScreen(true, wxFULLSCREEN_NOBORDER | wxFULLSCREEN_NOCAPTION    );
             }
         else if  (pos.y > menuline && last_mouse_pos_y <= menuline ) {
-                  my_lisaframe->ShowFullScreen(false, wxFULLSCREEN_ALL ); my_lisaframe->ShowFullScreen(true,  wxFULLSCREEN_ALL );
+                  my_lisaframe->ShowFullScreen(false, wxFULLSCREEN_NOBORDER ); my_lisaframe->ShowFullScreen(true,  wxFULLSCREEN_NOBORDER );
                   }
 
         if  (FullScreenCheckMenuItem->IsChecked() && !my_lisaframe->IsFullScreen() && pos.y > menuline) {
-              my_lisaframe->ShowFullScreen(false, wxFULLSCREEN_ALL );  my_lisaframe->ShowFullScreen(true,  wxFULLSCREEN_ALL );
+              my_lisaframe->ShowFullScreen(false, wxFULLSCREEN_NOBORDER );  my_lisaframe->ShowFullScreen(true,  wxFULLSCREEN_NOBORDER );
             }
     }
     #endif
@@ -5193,9 +5281,17 @@ void LisaEmFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
 
     save_global_prefs();
 
+    // Stop all sounds before cleanup
+    wxSound::Stop();
+
     EXTERMINATE(my_lisabitmap          );
     EXTERMINATE(my_memDC               );
     //EXTERMINATE(my_lisa_sound          );
+
+    // On macOS, don't delete wxSound objects - AudioToolbox uses async callbacks
+    // that can fire after Stop() returns, causing use-after-free crashes.
+    // Small memory leak at shutdown is safer than racing with OS callbacks.
+#ifndef __WXOSX__
     EXTERMINATE(my_floppy_eject        );
     EXTERMINATE(my_floppy_insert       );
     EXTERMINATE(my_floppy_insert_nopower);
@@ -5205,6 +5301,7 @@ void LisaEmFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
     EXTERMINATE(my_lisa_power_switch01 );
     EXTERMINATE(my_lisa_power_switch02 );
     EXTERMINATE(my_poweroffclk         );
+#endif
     EXTERMINATE(my_skin                );
     EXTERMINATE(my_skin0               );
     EXTERMINATE(my_skin1               );
@@ -5519,6 +5616,91 @@ extern "C" int yesnomessagebox(char *s, char *t)  // messagebox string of text, 
     return (result == wxID_YES);
 }
 
+void update_fullscreen_buttons_layout(void)
+{
+  if (!my_lisaframe || !my_lisawin || !g_fullscreen_buttons_panel) return;
+
+  if (!my_lisaframe->IsFullScreen())
+  {
+      g_fullscreen_buttons_panel->Hide();
+      int cw, ch;
+      my_lisaframe->GetClientSize(&cw, &ch);
+      my_lisawin->SetSize(0, 0, cw, ch);
+      return;
+  }
+
+  int cw, ch;
+  my_lisaframe->GetClientSize(&cw, &ch);
+  int display_w = 720;
+  int display_h = 500;
+  get_layout_display_extent(&display_w, &display_h);
+  int sidebar_w = 0;
+  int overlay_sidebar = 0;
+  compute_fullscreen_layout_metrics(cw, ch, display_w, display_h, &sidebar_w, &overlay_sidebar, NULL);
+
+  // In overlay mode, LisaWin should occupy the full fullscreen client area.
+  int lisa_w = overlay_sidebar ? cw : (cw - sidebar_w);
+  if (lisa_w < 1) lisa_w = 1;
+  my_lisawin->SetSize(0, 0, lisa_w, ch);
+
+  if (!g_fullscreen_scale_in_progress && display_w > 0 && display_h > 0)
+  {
+      if (lisa_w > 1 && ch > 1)
+      {
+          // Use the scale from compute_fullscreen_layout_metrics (which respects sidebar_w)
+          float fit_scale;
+          compute_fullscreen_layout_metrics(cw, ch, display_w, display_h, NULL, NULL, &fit_scale);
+          
+          if (fit_scale < 0.25f) fit_scale = 0.25f;
+          if (fit_scale > 8.0f)  fit_scale = 8.0f;
+          float delta = hidpi_scale - fit_scale;
+          if (delta < 0.0f) delta = -delta;
+          if (fit_scale > 0.0f && delta > 0.001f)
+          {
+              g_fullscreen_scale_in_progress = 1;
+              hidpi_scale = fit_scale;
+              set_hidpi_scale();
+              setvideomode(lisa_ui_video_mode);
+              g_fullscreen_scale_in_progress = 0;
+          }
+      }
+  }
+
+  // In overlay mode anchor panel inside the right edge; otherwise place after Lisa viewport.
+  int panel_x = overlay_sidebar ? (cw - sidebar_w) : lisa_w;
+  if (panel_x < 0) panel_x = 0;
+  
+  g_fullscreen_buttons_panel->SetSize(panel_x, 0, sidebar_w, ch);
+
+  if (sidebar_w <= 0)
+  {
+      g_fullscreen_buttons_panel->Hide();
+      return;
+  }
+
+  g_fullscreen_buttons_panel->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+  g_fullscreen_buttons_panel->SetOwnBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+  g_fullscreen_buttons_panel->Show();
+  g_fullscreen_buttons_panel->Raise();
+
+  const int pad = 8;
+  const int btn_h = 28;
+  int rail_w = sidebar_w;
+  if (rail_w > 140) rail_w = 140;
+  int btn_w = rail_w - pad * 2;
+  if (btn_w > 124) btn_w = 124;
+  if (btn_w < 72) btn_w = rail_w - 4;
+  if (btn_w < 40) btn_w = 40;
+  int btn_x = (rail_w - btn_w) / 2;
+  if (btn_x < 0) btn_x = 0;
+  int y = pad + 12;
+  if (g_fs_btn_power)           { g_fs_btn_power->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
+  if (g_fs_btn_floppy)          { g_fs_btn_floppy->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
+  if (g_fs_btn_newfloppy)       { g_fs_btn_newfloppy->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
+  if (g_fs_btn_profile)         { g_fs_btn_profile->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
+  if (g_fs_btn_exit_fullscreen) { g_fs_btn_exit_fullscreen->SetSize(btn_x, y, btn_w, btn_h); }
+}
+
 
 // Yes, I know this is a global C function and I'm not doing it the C++ way! 
 // this way all the menus get updated from a single place whenever needed,
@@ -5527,6 +5709,7 @@ extern "C" int yesnomessagebox(char *s, char *t)  // messagebox string of text, 
 void update_toolbar_button_states(void)
 {
   if (!g_toolbar || !my_lisaframe || !my_lisawin) return;
+  update_fullscreen_buttons_layout();
 
   const int tbsz = MAX(g_toolbar->GetToolBitmapSize().GetWidth(), 16);
   const int power_on = ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON) ? 1 : 0;
@@ -5560,6 +5743,7 @@ void update_toolbar_button_states(void)
       last_power_on = power_on;
       changed = true;
   }
+  if (g_fs_btn_power) g_fs_btn_power->SetLabel(power_on ? wxT("Power Off") : wxT("Power On"));
 
   if (floppy_attached != last_floppy_attached ||
       floppy_io_active != last_floppy_io_active ||
@@ -5593,6 +5777,15 @@ void update_toolbar_button_states(void)
       last_floppy_writing = floppy_writing;
       changed = true;
   }
+  if (g_fs_btn_floppy)
+  {
+      wxString ioState = wxT("Empty");
+      if (floppy_io_active && floppy_writing)      ioState = wxT("Writing");
+      else if (floppy_io_active && !floppy_writing) ioState = wxT("Reading");
+      else if (floppy_attached)                    ioState = wxT("Attached");
+      g_fs_btn_floppy->SetLabel(wxString::Format(wxT("Disk: %s"), ioState));
+  }
+  if (g_fs_btn_newfloppy) g_fs_btn_newfloppy->SetLabel(wxT("New Disk"));
 
   if (profile_editable != last_profile_editable)
   {
@@ -5615,6 +5808,33 @@ void update_toolbar_button_states(void)
                                                    : wxT("Power off Lisa to configure ProFile drives"));
       last_profile_editable = profile_editable;
       changed = true;
+  }
+  if (g_fs_btn_profile)
+  {
+      g_fs_btn_profile->SetLabel(profile_editable ? wxT("Profile") : wxT("Profile (Locked)"));
+      g_fs_btn_profile->Enable(profile_editable != 0);
+  }
+
+  if (my_lisaframe->GetStatusBar() && my_lisaframe->GetStatusBar()->GetFieldsCount() > 1)
+  {
+      wxString runState = wxT("Off");
+      if (my_lisaframe->running == emulation_running) runState = wxT("Running");
+      else if (my_lisaframe->running == emulation_paused || my_lisaframe->running == emuation_paused_for_screen) runState = wxT("Paused");
+
+      wxString diskState = wxT("Empty");
+      if (floppy_io_active && floppy_writing)      diskState = wxT("Writing");
+      else if (floppy_io_active && !floppy_writing) diskState = wxT("Reading");
+      else if (floppy_attached)                    diskState = wxT("Attached");
+
+      wxString profileState = profile_editable ? wxT("Configurable") : wxT("Locked (power off to configure)");
+      wxString summary = wxString::Format(wxT("Machine: %s | Floppy: %s | ProFile: %s"),
+                                          runState, diskState, profileState);
+      static wxString lastSummary;
+      if (!summary.IsSameAs(lastSummary))
+      {
+          my_lisaframe->SetStatusText(summary, 1);
+          lastSummary = summary;
+      }
   }
 
   if (changed) g_toolbar->Realize();
@@ -5644,13 +5864,37 @@ void update_menu_checkmarks(void)
 
         if (!!my_lisaframe)
         {
-            fileMenu->Check(ID_PAUSE, (my_lisaframe->running == emulation_paused) );
+            const bool machine_on = (my_lisaframe->running != emulation_off);
+            const bool machine_paused = (my_lisaframe->running == emulation_paused || my_lisaframe->running == emuation_paused_for_screen);
+
+            fileMenu->Check(ID_PAUSE, machine_paused);
+            fileMenu->Enable(ID_PAUSE, machine_on);
+            fileMenu->SetLabel(ID_PAUSE, machine_paused ? wxT("Resume") : wxT("Pause"));
+
+            if (!!editMenu) editMenu->Enable(wxID_PASTE, machine_on);
+
+            if (!!keyMenu)
+            {
+                keyMenu->Enable(ID_APPLEPOWERKEY, machine_on);
+                keyMenu->Enable(ID_KEY_APL_DOT, machine_on);
+                keyMenu->Enable(ID_KEY_APL_S, machine_on);
+                keyMenu->Enable(ID_KEY_APL_ENTER, machine_on);
+                keyMenu->Enable(ID_KEY_APL_RENTER, machine_on);
+                keyMenu->Enable(ID_KEY_APL_1, machine_on);
+                keyMenu->Enable(ID_KEY_APL_2, machine_on);
+                keyMenu->Enable(ID_KEY_APL_3, machine_on);
+                keyMenu->Enable(ID_KEY_OPT_0, machine_on);
+                keyMenu->Enable(ID_KEY_OPT_4, machine_on);
+                keyMenu->Enable(ID_KEY_OPT_7, machine_on);
+                keyMenu->Enable(ID_KEY_WD2501, machine_on);
+                keyMenu->Enable(ID_KEY_NMI, machine_on);
+                keyMenu->Enable(ID_KEY_RESET, machine_on);
+            }
+
             DisplayMenu->Check(ID_HIDE_HOST_MOUSE,!!hide_host_mouse);
             DisplayMenu->Check(ID_USE_MOUSE_SCALE,my_lisaframe->use_mouse_scale);
 
-            #ifndef __WXOSX__
             DisplayMenu->Check(ID_VID_FULLSCREEN, (my_lisaframe->IsFullScreen()));
-            #endif
             //DisplayMenu->Check(ID_FORCE_REFRESH, !!(my_lisaframe->force_display_refresh));
         }
 
@@ -5766,6 +6010,26 @@ void LisaEmFrame::UpdateProfileMenu(void)
   profileMenu->Check(ID_PROFILE_S2L,    (IS_PARALLEL_PORT_ENABLED(6) && (my_lisaconfig->slot2.IsSameAs(_T("dualparallel"),false)) && !my_lisaconfig->s2l.IsSameAs(_T("NOTHING"), false)  ));
   profileMenu->Check(ID_PROFILE_S3U,    (IS_PARALLEL_PORT_ENABLED(7) && (my_lisaconfig->slot3.IsSameAs(_T("dualparallel"),false)) && !my_lisaconfig->s3h.IsSameAs(_T("NOTHING"), false)  ));
   profileMenu->Check(ID_PROFILE_S3L,    (IS_PARALLEL_PORT_ENABLED(8) && (my_lisaconfig->slot3.IsSameAs(_T("dualparallel"),false)) && !my_lisaconfig->s3l.IsSameAs(_T("NOTHING"), false)  ));
+
+  int connected_ports=0, powered_ports=0;
+  if (!my_lisaconfig->parallel.IsSameAs(_T("NOTHING"), false)) { connected_ports++; if (IS_PARALLEL_PORT_ENABLED(2)) powered_ports++; }
+  if (my_lisaconfig->slot1.IsSameAs(_T("dualparallel"),false))
+  {
+      if (!my_lisaconfig->s1h.IsSameAs(_T("NOTHING"), false)) { connected_ports++; if (IS_PARALLEL_PORT_ENABLED(3)) powered_ports++; }
+      if (!my_lisaconfig->s1l.IsSameAs(_T("NOTHING"), false)) { connected_ports++; if (IS_PARALLEL_PORT_ENABLED(4)) powered_ports++; }
+  }
+  if (my_lisaconfig->slot2.IsSameAs(_T("dualparallel"),false))
+  {
+      if (!my_lisaconfig->s2h.IsSameAs(_T("NOTHING"), false)) { connected_ports++; if (IS_PARALLEL_PORT_ENABLED(5)) powered_ports++; }
+      if (!my_lisaconfig->s2l.IsSameAs(_T("NOTHING"), false)) { connected_ports++; if (IS_PARALLEL_PORT_ENABLED(6)) powered_ports++; }
+  }
+  if (my_lisaconfig->slot3.IsSameAs(_T("dualparallel"),false))
+  {
+      if (!my_lisaconfig->s3h.IsSameAs(_T("NOTHING"), false)) { connected_ports++; if (IS_PARALLEL_PORT_ENABLED(7)) powered_ports++; }
+      if (!my_lisaconfig->s3l.IsSameAs(_T("NOTHING"), false)) { connected_ports++; if (IS_PARALLEL_PORT_ENABLED(8)) powered_ports++; }
+  }
+  profileMenu->Enable(ID_PROFILE_ALL_ON,  connected_ports>0 && powered_ports<connected_ports);
+  profileMenu->Enable(ID_PROFILE_ALL_OFF, powered_ports>0);
 
   profileMenu->Enable(ID_PROFILEPWR,( !my_lisaconfig->parallel.IsSameAs(_T("NOTHING"), false) ));
   if ( my_lisaconfig->parallel.IsSameAs(_T("PROFILE"), false) )  
@@ -6289,10 +6553,8 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     DisplayMenu->AppendCheckItem(ID_HIDE_HOST_MOUSE,wxT("Hide Host Mouse Pointer"),wxT("Hides the host mouse pointer - may cause lag"));
     DisplayMenu->AppendCheckItem(ID_USE_MOUSE_SCALE,wxT("Use Mouse Scaling"),wxT("Enab;e/Disable this if mouse tracking doesn't work"));
 
-    #ifndef __WXOSX__
     DisplayMenu->AppendSeparator();
     FullScreenCheckMenuItem=DisplayMenu->AppendCheckItem(ID_VID_FULLSCREEN,wxT("Fullscreen\tF11"), wxT("Enter/leave full screen mode"));
-    #endif
 
     #ifdef DEBUG
     throttleMenu->AppendRadioItem(ID_THROTTLE1,       wxT("1 MHz")  , wxT("1 MHz - Slowdown for debugging") );
@@ -6336,6 +6598,7 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
 
     keyMenu->Append(ID_POWERKEY,         wxT("Power Button"),             wxT("Push the Power Button"));
     keyMenu->Append(ID_APPLEPOWERKEY,    wxT("Apple+Power Button"),       wxT("Push Apple + the Power Button"));
+    keyMenu->AppendCheckItem(ID_PAUSE,   wxT("Pause"),                    wxT("Pause Emulation\tCtrl-." ) );
     keyMenu->AppendSeparator();
 
     keyMenu->Append(ID_KEY_APL_DOT,      wxT("Apple ."),                  wxT("Apple + ."));
@@ -6367,12 +6630,8 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     //not-yet-used//keyMenu->AppendSeparator();
     //not-yet-used//keyMenu->Append(ID_KEYBOARD,         wxT("Keyboard"),         wxT("Lisa Keyboard"));
 
-    fileMenu->Append(wxID_OPEN,          wxT("Open Preferences"),         wxT("Open a LisaEm Preferences file"));
-    fileMenu->Append(wxID_SAVEAS,        wxT("Save Preferences As"),      wxT("Save current LisaEm Preferences to a new file"));
     fileMenu->Append(wxID_PREFERENCES,   wxT("Preferences"),              wxT("Configure this Lisa"));
 
-    fileMenu->AppendSeparator();
-    fileMenu->AppendCheckItem(ID_PAUSE,  wxT("Pause"),                    wxT("Pause Emulation\tCtrl-." ) );
     fileMenu->AppendSeparator();
 
     fileMenu->Append(  ID_FLOPPY,        wxT("Insert diskette"),          wxT("Insert a disk image\tCtrl-O"));
@@ -6416,11 +6675,11 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     menuBar = new wxMenuBar();
 
     menuBar->Append(fileMenu,     wxT("File"));
+    menuBar->Append(keyMenu,      wxT("Machine"));
     menuBar->Append(editMenu,     wxT("Edit"));
-    menuBar->Append(keyMenu,      wxT("Key"));
-    menuBar->Append(DisplayMenu,  wxT("Display"));
-    menuBar->Append(throttleMenu, wxT("Throttle"));
-    menuBar->Append(profileMenu,  wxT("Parallel Port"));
+    menuBar->Append(DisplayMenu,  wxT("View"));
+    menuBar->Append(throttleMenu, wxT("Performance"));
+    menuBar->Append(profileMenu,  wxT("Storage"));
 
     //menuBar->Append(windowMenu,   wxT("&Window"));   // ::TODO:: add this in later once we have some code to handle this.
     menuBar->Append(helpMenu,     wxT("&Help"));
@@ -6432,7 +6691,11 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     UpdateProfileMenu();
 
     ALERT_LOG(0,"Create Status Bar 1");
-    CreateStatusBar(1);
+    CreateStatusBar(2);
+    {
+      int statusWidths[2] = { -3, -2 };
+      SetStatusWidths(2, statusWidths);
+    }
 
     ALERT_LOG(0,"Create Toolbar");
     {
@@ -6485,6 +6748,40 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
         toolbar->AddTool(ID_TOOLBAR_FLOPPY_NEW,  wxT("New Disk"),    newFloppyBmp, wxT("Create and insert a blank disk image"));
         toolbar->AddTool(ID_TOOLBAR_PROFILE,     wxT("Profile"),     profileBmp,   wxT("Configure ProFile drives (Lisa must be off)"));
         toolbar->Realize();
+    }
+    if (!g_fullscreen_buttons_panel)
+    {
+        g_fullscreen_buttons_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(180, 320));
+        g_fullscreen_buttons_panel->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+        g_fullscreen_buttons_panel->SetOwnBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+        g_fs_btn_power = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Power"));
+        g_fs_btn_floppy = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Insert Disk"));
+        g_fs_btn_newfloppy = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("New Disk"));
+        g_fs_btn_profile = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Profile"));
+        g_fs_btn_exit_fullscreen = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Exit Fullscreen"));
+
+        g_fs_btn_power->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { handle_powerbutton(); });
+        g_fs_btn_floppy->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnxFLOPPY(); });
+        g_fs_btn_newfloppy->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnxNewFLOPPY(); });
+        g_fs_btn_profile->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            wxCommandEvent ev;
+            OnToolbarProfile(ev);
+        });
+        g_fs_btn_exit_fullscreen->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (FullScreenCheckMenuItem)
+            {
+                FullScreenCheckMenuItem->Check(false);
+                wxCommandEvent ev;
+                OnFullScreen(ev);
+            }
+            else
+            {
+                ShowFullScreen(false, wxFULLSCREEN_NOBORDER);
+                update_fullscreen_buttons_layout();
+            }
+        });
+
+        g_fullscreen_buttons_panel->Hide();
     }
 
     ALERT_LOG(0,"Welcome status")
@@ -9657,7 +9954,7 @@ char *get_welcome_fortune(void)
 
   "Because... fuck cancer",
 
-  "...in the immortal words of John Oliver, \"Fuck you 2020, get fucked!\" That's it, that's our emulator, we'll back with 1.2.8, please stay safe until then."
+  "...in the immortal words of John Oliver, \"Fuck you 2020, get fucked!\" That's it, that's our emulator, we'll back with 1.2.9, please stay safe until then."
 };
 
   int count=sizeof(fubar)/sizeof(fubar[0]);

@@ -1,6 +1,6 @@
 /**************************************************************************************\
 *                                                                                      *
-*              The Lisa Emulator Project  V1.2.7      DEV 2019.09.09                   *
+*              The Lisa Emulator Project  V1.2.9      DEV 2019.09.09                   *
 *                             http://lisaem.sunder.net                                 *
 *                                                                                      *
 *                  Copyright (C) 1998, 2019 Ray A. Arachelian                          *

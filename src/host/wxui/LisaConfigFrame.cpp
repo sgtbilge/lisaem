@@ -1,6 +1,6 @@
 /**************************************************************************************\
 *                                                                                      *
-*              The Lisa Emulator Project  V1.2.7      DEV 2007.12.04                   *
+*              The Lisa Emulator Project  V1.2.9      DEV 2007.12.04                   *
 *                             http://lisaem.sunder.net                                 *
 *                                                                                      *
 *                  Copyright (C) 1998, MMXX Ray A. Arachelian                          *
@@ -31,6 +31,7 @@
 #include <wx/frame.h>
 #include <wx/panel.h>
 #include <wx/notebook.h>
+#include <wx/filename.h>
 
 #include "machine.h"
 
@@ -67,7 +68,11 @@ extern "C" float hidpi_scale;
 
 enum {
         ID_NOTEBOOK=2001,
+        ID_PREFS_OPEN,
+        ID_PREFS_SAVEAS,
+        ID_PREFS_HINT,
         ID_APPLY,
+        ID_REVERT,
         ID_PICK_ROM,
         ID_PICK_DPROM,
         ID_PICK_KB_B,
@@ -96,8 +101,12 @@ enum {
 BEGIN_EVENT_TABLE(LisaConfigFrame, wxFrame)
   EVT_NOTEBOOK_PAGE_CHANGED(ID_NOTEBOOK,  LisaConfigFrame::OnNoteBook)
   EVT_NOTEBOOK_PAGE_CHANGING(ID_NOTEBOOK, LisaConfigFrame::OnNoteBook)
+  EVT_SIZE(                              LisaConfigFrame::OnResize)
+  EVT_BUTTON(ID_PREFS_OPEN,              LisaConfigFrame::OnOpenPrefs)
+  EVT_BUTTON(ID_PREFS_SAVEAS,            LisaConfigFrame::OnSavePrefs)
   EVT_BUTTON(ID_SERNO_INFO,               LisaConfigFrame::OnSernoInfo)
   EVT_BUTTON(ID_APPLY,                    LisaConfigFrame::OnApply)
+  EVT_BUTTON(ID_REVERT,                   LisaConfigFrame::OnRevert)
   EVT_BUTTON(ID_ZAP_PRAM,                 LisaConfigFrame::OnZapPram)
   EVT_BUTTON(ID_SAVE_PRAM,                LisaConfigFrame::OnSavePram)
   EVT_BUTTON(ID_LOAD_PRAM,                LisaConfigFrame::OnLoadPram)  
@@ -124,7 +133,7 @@ const int idbl[4]={0, ID_PICK_PROFILESB1L, ID_PICK_PROFILESB2L, ID_PICK_PROFILES
 // using wxID_ANY for lower for some reason(why?), idbl - button lower line ~493
 
 LisaConfigFrame::LisaConfigFrame(const wxString& title, LisaConfig *lisaconfig)
-       : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(550*HIDPISCALE,560*HIDPISCALE),
+       : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(550*HIDPISCALE,545*HIDPISCALE),
                  wxDEFAULT_FRAME_STYLE|wxCLIP_CHILDREN |//|wxNO_FULL_REPAINT_ON_RESIZE)
                  wxMINIMIZE_BOX|wxMAXIMIZE_BOX|wxRESIZE_BORDER|wxSYSTEM_MENU|wxCAPTION|
                  wxTAB_TRAVERSAL|wxCLOSE_BOX|wxNO_FULL_REPAINT_ON_RESIZE)
@@ -166,8 +175,14 @@ LisaConfigFrame::LisaConfigFrame(const wxString& title, LisaConfig *lisaconfig)
 
   // Reduced height from 650 to 560 to fit on screens with notch/menu bar
   thenoteBook =
-            new wxNotebook(this, ID_NOTEBOOK,  wxDefaultPosition, wxSize(550*HIDPISCALE, 560*HIDPISCALE) );
+            new wxNotebook(this, ID_NOTEBOOK,  wxDefaultPosition, wxSize(550*HIDPISCALE, 495*HIDPISCALE) );
   CreateNotebook(thenoteBook);
+
+  (void)new wxStaticText(this, ID_PREFS_HINT, _T("Apply saves all tabs. Turn Lisa off before changing ProFile paths."),
+                         wxPoint(10 * HIDPISCALE, 505 * HIDPISCALE), wxSize(330 * HIDPISCALE, 30 * HIDPISCALE));
+  (void)new wxButton(this, ID_REVERT, wxT("Revert"), wxPoint(360 * HIDPISCALE, 505 * HIDPISCALE), wxDefaultSize);
+  b_apply = new wxButton(this, ID_APPLY, wxT("Apply"), wxPoint(445 * HIDPISCALE, 505 * HIDPISCALE), wxDefaultSize);
+  RelayoutResponsive();
 }
 
 void LisaConfigFrame::OnNoteBook(wxNotebookEvent& WXUNUSED(event))
@@ -183,6 +198,118 @@ void LisaConfigFrame::OnNoteBook(wxNotebookEvent& WXUNUSED(event))
       }
 
      }
+
+void LisaConfigFrame::RelayoutResponsive(void)
+{
+    if (!thenoteBook) return;
+
+    int cw, ch;
+    GetClientSize(&cw, &ch);
+
+    const int margin = (int)(10 * HIDPISCALE);
+    const int rightGap = (int)(8 * HIDPISCALE);
+    const int actionBtnW = (int)(80 * HIDPISCALE);
+    const int browseBtnW = (int)(100 * HIDPISCALE);
+    const int minFieldW = (int)(180 * HIDPISCALE);
+
+    int footerY = ch - (int)(36 * HIDPISCALE);
+    int notebookH = footerY - margin;
+    if (notebookH < (int)(280 * HIDPISCALE)) notebookH = (int)(280 * HIDPISCALE);
+    thenoteBook->SetSize(0, 0, cw, notebookH);
+
+    wxWindow *hint = FindWindow(ID_PREFS_HINT);
+    if (hint) hint->SetSize(margin, footerY + (int)(4 * HIDPISCALE), cw - (actionBtnW * 2 + margin * 4), -1);
+
+    wxWindow *revertBtn = FindWindow(ID_REVERT);
+    if (revertBtn) revertBtn->SetSize(cw - (actionBtnW * 2 + margin), footerY, actionBtnW, -1);
+    if (b_apply) b_apply->SetSize(cw - (actionBtnW + margin), footerY, actionBtnW, -1);
+
+    auto right_anchor_page = [&](wxPanel *panel, wxTextCtrl *field, wxWindow *button, int buttonWidth)
+    {
+        if (!panel || !field) return;
+        const int pw = panel->GetClientSize().GetWidth();
+        const int btnX = pw - buttonWidth - margin;
+        int fieldW = pw - margin - rightGap - buttonWidth - margin;
+        if (fieldW < minFieldW) fieldW = minFieldW;
+        field->SetSize(margin, field->GetPosition().y, fieldW, -1);
+        if (button) button->SetSize(btnX, button->GetPosition().y, buttonWidth, -1);
+    };
+
+    wxPanel *general = wxDynamicCast(thenoteBook->GetPage(0), wxPanel);
+    if (general)
+    {
+        right_anchor_page(general, serialtxt, general->FindWindow(ID_SERNO_INFO), browseBtnW);
+        right_anchor_page(general, m_rompath, b_rompath, browseBtnW);
+        right_anchor_page(general, m_dprompath, b_dprompath, browseBtnW);
+
+        wxWindow *openPrefs = general->FindWindow(ID_PREFS_OPEN);
+        wxWindow *savePrefs = general->FindWindow(ID_PREFS_SAVEAS);
+        const int pw = general->GetClientSize().GetWidth();
+        const int btnX = pw - actionBtnW - margin;
+        if (savePrefs) savePrefs->SetSize(btnX, savePrefs->GetPosition().y, actionBtnW, -1);
+        if (openPrefs) openPrefs->SetSize(btnX - actionBtnW - rightGap, openPrefs->GetPosition().y, actionBtnW, -1);
+
+        wxWindow *savePram = general->FindWindow(ID_SAVE_PRAM);
+        wxWindow *loadPram = general->FindWindow(ID_LOAD_PRAM);
+        wxWindow *zapPram  = general->FindWindow(ID_ZAP_PRAM);
+        if (savePram && loadPram && zapPram)
+        {
+            const int smallW = (int)(70 * HIDPISCALE);
+            const int rightX = pw - smallW - margin;
+            zapPram->SetSize(rightX, zapPram->GetPosition().y, smallW, -1);
+            loadPram->SetSize(rightX - smallW - rightGap, loadPram->GetPosition().y, smallW, -1);
+            savePram->SetSize(rightX - (smallW + rightGap) * 2, savePram->GetPosition().y, smallW, -1);
+        }
+    }
+
+    wxPanel *ports = wxDynamicCast(thenoteBook->GetPage(1), wxPanel);
+    if (ports)
+    {
+        const int pw = ports->GetClientSize().GetWidth();
+        const int xonX = pw - (int)(120 * HIDPISCALE);
+        if (serialaparam)
+        {
+            int w = pw - margin - rightGap - (int)(140 * HIDPISCALE);
+            if (w < minFieldW) w = minFieldW;
+            serialaparam->SetSize(margin, serialaparam->GetPosition().y, w, -1);
+        }
+        if (serialbparam)
+        {
+            int w = pw - margin - rightGap - (int)(140 * HIDPISCALE);
+            if (w < minFieldW) w = minFieldW;
+            serialbparam->SetSize(margin, serialbparam->GetPosition().y, w, -1);
+        }
+        if (serialaxon) serialaxon->SetPosition(wxPoint(xonX, serialaxon->GetPosition().y));
+        if (serialbxon) serialbxon->SetPosition(wxPoint(xonX, serialbxon->GetPosition().y));
+        right_anchor_page(ports, m_propath, b_propath, browseBtnW);
+    }
+
+    for (int slot=1; slot<=3; slot++)
+    {
+        wxPanel *slotPanel = wxDynamicCast(thenoteBook->GetPage(slot+1), wxPanel);
+        if (!slotPanel) continue;
+        right_anchor_page(slotPanel, m_text_propathh[slot], slotPanel->FindWindow(idbh[slot]), browseBtnW);
+        right_anchor_page(slotPanel, m_text_propathl[slot], slotPanel->FindWindow(idbl[slot]), browseBtnW);
+    }
+
+    wxPanel *printer = wxDynamicCast(thenoteBook->GetPage(5), wxPanel);
+    if (printer)
+    {
+        right_anchor_page(printer, iw_img_path, iw_img_path_b, browseBtnW);
+        const int pw = printer->GetClientSize().GetWidth();
+        const int choiceX = pw - (int)(160 * HIDPISCALE);
+        if (dipsw1_123) dipsw1_123->SetPosition(wxPoint(choiceX, dipsw1_123->GetPosition().y));
+        if (dipsw1_67)  dipsw1_67->SetPosition(wxPoint(choiceX, dipsw1_67->GetPosition().y));
+    }
+
+    Layout();
+}
+
+void LisaConfigFrame::OnResize(wxSizeEvent& event)
+{
+    RelayoutResponsive();
+    event.Skip();
+}
 
 extern "C" uint8 floppy_ram[2048];
 extern "C" int islisarunning(void);
@@ -229,6 +356,23 @@ void  LisaConfigFrame::OnSernoInfo(wxCommandEvent& WXUNUSED(event))
 
     wxMessageBox(text,_T("About your Lisa's Serial Numer"), wxICON_INFORMATION | wxOK);
     
+}
+
+void LisaConfigFrame::OnOpenPrefs(wxCommandEvent& WXUNUSED(event))
+{
+    wxWindow *target = wxTheApp ? wxTheApp->GetTopWindow() : NULL;
+    if (!target) return;
+    wxCommandEvent e(wxEVT_MENU, wxID_OPEN);
+    wxPostEvent(target, e);
+    Close();
+}
+
+void LisaConfigFrame::OnSavePrefs(wxCommandEvent& WXUNUSED(event))
+{
+    wxWindow *target = wxTheApp ? wxTheApp->GetTopWindow() : NULL;
+    if (!target) return;
+    wxCommandEvent e(wxEVT_MENU, wxID_SAVEAS);
+    wxPostEvent(target, e);
 }
 
 void  LisaConfigFrame::OnSavePram(wxCommandEvent& WXUNUSED(event))
@@ -354,6 +498,74 @@ void  LisaConfigFrame::OnApply(wxCommandEvent& WXUNUSED(event))
  if (!m_text_propathh[3])  return;
  if (!m_text_propathl[3])  return;
 
+ wxString rompath = m_rompath->GetValue();
+ rompath.Trim();
+ rompath.Trim(false);
+ if (rompath.IsEmpty())
+ {
+   thenoteBook->SetSelection(0);
+   m_rompath->SetFocus();
+   wxMessageBox(_T("ROM path is required."), _T("Missing required value"), wxICON_INFORMATION | wxOK);
+   return;
+ }
+
+ if (!wxFileName::FileExists(rompath))
+ {
+   thenoteBook->SetSelection(0);
+   m_rompath->SetFocus();
+   wxMessageBox(_T("ROM file does not exist. Please pick a valid Lisa ROM file."),
+                _T("Invalid ROM path"), wxICON_INFORMATION | wxOK);
+   return;
+ }
+
+ if (pportbox->GetSelection()==0)
+ {
+   wxString profile_path = m_propath->GetValue();
+   profile_path.Trim();
+   profile_path.Trim(false);
+   if (profile_path.IsEmpty())
+   {
+     thenoteBook->SetSelection(1);
+     m_propath->SetFocus();
+     wxMessageBox(_T("Built-in ProFile path is required when Parallel Port is set to ProFile."),
+                  _T("Missing required value"), wxICON_INFORMATION | wxOK);
+     return;
+   }
+ }
+
+ if (islisarunning())
+ {
+   bool storage_changed = false;
+
+   if (!pportopts[pportbox->GetSelection()].IsSameAs(my_lisaconfig->parallel, false)) storage_changed=true;
+   if (!m_propath->GetValue().IsSameAs(my_lisaconfig->parallelp, false))               storage_changed=true;
+
+   if (!slotcard[sloton[1]->GetSelection()].IsSameAs(my_lisaconfig->slot1, false))     storage_changed=true;
+   if (!slotcard[sloton[2]->GetSelection()].IsSameAs(my_lisaconfig->slot2, false))     storage_changed=true;
+   if (!slotcard[sloton[3]->GetSelection()].IsSameAs(my_lisaconfig->slot3, false))     storage_changed=true;
+
+   if (!pportopts[pportboxh[1]->GetSelection()].IsSameAs(my_lisaconfig->s1h, false))   storage_changed=true;
+   if (!pportopts[pportboxl[1]->GetSelection()].IsSameAs(my_lisaconfig->s1l, false))   storage_changed=true;
+   if (!pportopts[pportboxh[2]->GetSelection()].IsSameAs(my_lisaconfig->s2h, false))   storage_changed=true;
+   if (!pportopts[pportboxl[2]->GetSelection()].IsSameAs(my_lisaconfig->s2l, false))   storage_changed=true;
+   if (!pportopts[pportboxh[3]->GetSelection()].IsSameAs(my_lisaconfig->s3h, false))   storage_changed=true;
+   if (!pportopts[pportboxl[3]->GetSelection()].IsSameAs(my_lisaconfig->s3l, false))   storage_changed=true;
+
+   if (!m_text_propathh[1]->GetValue().IsSameAs(my_lisaconfig->s1hp, false))           storage_changed=true;
+   if (!m_text_propathl[1]->GetValue().IsSameAs(my_lisaconfig->s1lp, false))           storage_changed=true;
+   if (!m_text_propathh[2]->GetValue().IsSameAs(my_lisaconfig->s2hp, false))           storage_changed=true;
+   if (!m_text_propathl[2]->GetValue().IsSameAs(my_lisaconfig->s2lp, false))           storage_changed=true;
+   if (!m_text_propathh[3]->GetValue().IsSameAs(my_lisaconfig->s3hp, false))           storage_changed=true;
+   if (!m_text_propathl[3]->GetValue().IsSameAs(my_lisaconfig->s3lp, false))           storage_changed=true;
+
+   if (storage_changed)
+   {
+     wxMessageBox(_T("Storage and ProFile attachment changes require the Lisa to be powered off."),
+                  _T("Power off required"), wxICON_INFORMATION | wxOK);
+     return;
+   }
+ }
+
  my_lisaconfig->myserial= serialtxt->GetValue();
  my_lisaconfig->rompath = m_rompath->GetValue();
  my_lisaconfig->dualrom =m_dprompath->GetValue();
@@ -452,13 +664,23 @@ consoletermwindow = console_term->GetValue() ? 1:0;
    Close();
 }
 
+void LisaConfigFrame::OnRevert(wxCommandEvent& WXUNUSED(event))
+{
+    wxMessageDialog d(this,
+                      _T("Discard unapplied preference changes and close this window?"),
+                      _T("Revert changes?"),
+                      wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT,
+                      wxDefaultPosition);
+    if (d.ShowModal()==wxID_YES) Close();
+}
+
 
 
 
 
 wxPanel *LisaConfigFrame::CreateSlotConfigPage(wxNotebook *parent, int slot)
 {
-    int y=10* HIDPISCALE, ya=50* HIDPISCALE;
+    int y=10* HIDPISCALE, ya=44* HIDPISCALE;
 
     if ( slot<1 || slot>3) return NULL;
 
@@ -515,8 +737,6 @@ wxPanel *LisaConfigFrame::CreateSlotConfigPage(wxNotebook *parent, int slot)
     // using wxID_ANY for lower for some reason(why?), idbl - button lower line ~493
 
 
-    (void) new wxButton( panel, ID_APPLY, wxT("Apply"), applypoint, wxDefaultSize );
-
     return panel;
 }
 
@@ -525,13 +745,16 @@ wxPanel *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
 {
    wxPanel *panel = new wxPanel(parent);
 
-   int y=10* HIDPISCALE,  ya=50* HIDPISCALE;
+   int y=10* HIDPISCALE,  ya=44* HIDPISCALE;
 
    // Tell the user what config file we're using.
    wxString t;
    t=_T("Prefs file: ") + get_config_filename();
 
-   (void)new wxStaticText(panel,wxID_ANY,   t,      wxPoint( 10* HIDPISCALE,  y), wxSize(500* HIDPISCALE, 30* HIDPISCALE));    y+=ya/2; //y+=ya/2;
+   (void)new wxStaticText(panel,wxID_ANY,   t,      wxPoint( 10* HIDPISCALE,  y+4), wxSize(300* HIDPISCALE, 30* HIDPISCALE));
+   (void)new wxButton(panel, ID_PREFS_OPEN,   wxT("Open..."),    wxPoint(320*HIDPISCALE, y), wxDefaultSize);
+   (void)new wxButton(panel, ID_PREFS_SAVEAS, wxT("Save As..."), wxPoint(410*HIDPISCALE, y), wxDefaultSize);
+   y+=ya/2; //y+=ya/2;
 
     wxString ramsize[] = { wxT("0.5 MB"), wxT("1 MB"), wxT("1.5 MB"),  wxT("2 MB*") };
 
@@ -623,9 +846,6 @@ wxPanel *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
     console_term = new wxCheckBox(panel, wxID_ANY, wxT("Console Terminal"), wxPoint(10 * HIDPISCALE,y+ya/2), wxDefaultSize,wxCHK_2STATE);
     console_term->SetValue( (bool) consoletermwindow );
 
-    applypoint=wxPoint(420 * HIDPISCALE,  yz+ya);
-    (void) new wxButton( panel, ID_APPLY, wxT("Apply"), applypoint, wxDefaultSize );
-
     (void)new wxStaticText(panel, wxID_ANY,  _T("PRAM:"),  wxPoint(320 * HIDPISCALE, (yz)-ya/2), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE));
     (void) new wxButton( panel, ID_SAVE_PRAM, wxT("Save"), wxPoint(320 * HIDPISCALE,  yz), wxDefaultSize );
     (void) new wxButton( panel, ID_LOAD_PRAM, wxT("Load"), wxPoint(400 * HIDPISCALE,  yz), wxDefaultSize );
@@ -680,8 +900,10 @@ wxPanel *LisaConfigFrame::CreatePortsConfigPage(wxNotebook *parent)
         if (my_lisaconfig->serial2_setting.IsSameAs(serportopts[i],false) ) serialbbox->SetSelection(i);
     
     y+=ya*2;
-
-
+    (void)new wxStaticText(panel, wxID_ANY,
+                           _T("Note: Parallel/ProFile storage changes require Lisa powered off."),
+                           wxPoint(10 * HIDPISCALE, y), wxSize(520 * HIDPISCALE, 30 * HIDPISCALE));
+    y+=ya;
 
     if (floppy_iorom!=0x88)
     {
@@ -709,9 +931,6 @@ wxPanel *LisaConfigFrame::CreatePortsConfigPage(wxNotebook *parent)
     b_propath = new wxButton  (panel, ID_PICK_PROFILE, wxT("browse"),  wxPoint(420 * HIDPISCALE, y), wxDefaultSize );
 
 
-    ya+=ya*2;
-    (void) new wxButton( panel, ID_APPLY, wxT("Apply"), applypoint, wxDefaultSize );
-
     return panel;
 }
 
@@ -719,7 +938,7 @@ wxPanel *LisaConfigFrame::CreatePortsConfigPage(wxNotebook *parent)
 wxPanel *LisaConfigFrame::CreatePrinterConfigPage(wxNotebook *parent)
 {
     wxPanel *panel = new wxPanel(parent);
-    int y=10, ya=45;
+    int y=10, ya=40;
 
     (void)new wxStaticText(panel, wxID_ANY, _T("ImageWriter/ADMP DIP Switch 1:"),      
                    wxPoint( 10 * HIDPISCALE,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE));    y+=(ya/2);
@@ -777,7 +996,6 @@ wxPanel *LisaConfigFrame::CreatePrinterConfigPage(wxNotebook *parent)
     iw_img_path_b = new wxButton  (panel, ID_PICK_IWDIR, wxT("browse"),  wxPoint(420 * HIDPISCALE, y), wxDefaultSize );
 
 
-    (void) new wxButton( panel, ID_APPLY, wxT("Apply"), applypoint, wxDefaultSize );
     return panel;
 }
 
@@ -791,12 +1009,12 @@ void LisaConfigFrame::CreateNotebook(wxNotebook *parent)
   wxPanel  *panel5 = CreateSlotConfigPage( parent,3);
   wxPanel  *panel6 = CreatePrinterConfigPage(parent);
 
-  parent->AddPage( panel1, wxT("config"), false, -1);
-  parent->AddPage( panel2, wxT("ports"),  false, -1);
-  parent->AddPage( panel3, wxT("slot1"),  false, -1);
-  parent->AddPage( panel4, wxT("slot2"),  false, -1);
-  parent->AddPage( panel5, wxT("slot3"),  false, -1);
-  parent->AddPage( panel6, wxT("print"),  false, -1);
+  parent->AddPage( panel1, wxT("General"),        false, -1);
+  parent->AddPage( panel2, wxT("Ports & Storage"),false, -1);
+  parent->AddPage( panel3, wxT("Storage Slot 1"), false, -1);
+  parent->AddPage( panel4, wxT("Storage Slot 2"), false, -1);
+  parent->AddPage( panel5, wxT("Storage Slot 3"), false, -1);
+  parent->AddPage( panel6, wxT("Printing"),       false, -1);
 
   parent->SetSelection(0);
 }

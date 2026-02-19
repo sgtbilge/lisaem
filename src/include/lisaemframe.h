@@ -238,6 +238,7 @@ public:
 
     //void OnIdleEvent(wxIdleEvent& event);
     void OnEmulationTimer(wxTimerEvent& event);
+    void OnSize(wxSizeEvent& event);
 
     void OnPasteToKeyboard(wxCommandEvent&event);
 

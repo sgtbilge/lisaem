@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../wxWidgets-3.2.9"
+		}
+	],
+	"settings": {}
+}

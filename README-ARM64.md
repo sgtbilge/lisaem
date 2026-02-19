@@ -1,6 +1,6 @@
 # LisaEm (Experimental Apple Silicon Derivative)
 
-**Version:** 1.2.8-EXPERIMENTAL-ARM64  
+**Version:** 1.2.9-EXPERIMENTAL-ARM64  
 **Target OS:** macOS 26.2+ (Apple Silicon / arm64)  
 **Status:** Experimental / Derivative Work
 

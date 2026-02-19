@@ -30,12 +30,16 @@ public:
     void        CreateNotebook(       wxNotebook *parent);
 
     //          event handlers
+    void        OnOpenPrefs(        wxCommandEvent& event);
+    void        OnSavePrefs(        wxCommandEvent& event);
     void        OnApply(            wxCommandEvent& event);
+    void        OnRevert(           wxCommandEvent& event);
     void        OnZapPram(          wxCommandEvent& event);
     void        OnSavePram(          wxCommandEvent& event);
     void        OnLoadPram(          wxCommandEvent& event);
     void        OnSernoInfo(         wxCommandEvent& event); 
     void        OnNoteBook(wxNotebookEvent& event);
+    void        OnResize(wxSizeEvent& event);
     void        OnPickRom(            wxCommandEvent& event);
     void        OnPickDRom(           wxCommandEvent& event);
     void        OnPickProFile(        wxCommandEvent& event);
@@ -118,6 +122,7 @@ public:
 
 
 private:
+    void        RelayoutResponsive(void);
     LisaConfig *my_lisaconfig;
     wxString slotcard[2];
 
@@ -125,4 +130,3 @@ private:
 };
 
 #endif
-
