@@ -330,8 +330,21 @@ static inline void getgraymap(uint16 up, uint16 val, uint16 dn,  uint8 *retval)
 #define DEBUG 1
 
 // ::TODO:: add params for rectangle to update to save cycles 
-HQX_API void HQX_CALLCONV hq3x_32_rb( int rowbytes,  wxBitmap *mybitmap, int Xres, int Yres, uint32 brightness ) // int xl,int yt,int xr,int yb
+HQX_API void HQX_CALLCONV hq3x_32_rb(int startx, int starty, int width, int height, int rowbytes,  wxBitmap *mybitmap, int Xres, int Yres, uint32 brightness )
 {
+    // Convert output coordinates/dimensions to input coordinates
+    // Output is 2x wide and 3x tall, so divide by scaling factor
+    int input_startx = startx / 2;
+    int input_starty = starty / 3;
+    int input_width = width / 2;
+    int input_height = height / 3;
+    
+    // Clamp to valid input ranges
+    if (input_startx < 0) input_startx = 0;
+    if (input_starty < 0) input_starty = 0;
+    if (input_startx + input_width > Xres) input_width = Xres - input_startx;
+    if (input_starty + input_height > Yres) input_height = Yres - input_starty;
+    
     int  x, y, k;                          // x,y iterators, k is circumcentral pixel iterator, xx=pixel x coord
 
     uint8 *sp, *up, *dn;
@@ -369,9 +382,6 @@ HQX_API void HQX_CALLCONV hq3x_32_rb( int rowbytes,  wxBitmap *mybitmap, int Xre
     PixelData::Iterator p21(data);  p21.Reset(data);  p21.MoveTo(data,1,2);
     PixelData::Iterator p22(data);  p22.Reset(data);  p22.MoveTo(data,2,2);
 
-    PixelData::Iterator p00rowStart(data);
-    p00rowStart=p00;
-
 /*
 Later it does this per horizontal pixel
             sp++;                          // X++
@@ -405,7 +415,14 @@ Later it does this per horizontal pixel
     sp=&lisaram[videolatchaddress];
     up=&lisaram[videolatchaddress];
     dn=&lisaram[videolatchaddress+rowbytes];
-    // x= x, dy=delta y, rowsize=76 or 90 - these are for the inputs from lisa video ram - 
+    
+    // Offset source pointers if we're processing a partial region (dirty rectangle)
+    // Need to skip to the starting row and account for byte packing
+    sp += (input_starty * rowbytes);
+    up  = sp;  // Will be set correctly in the loop for y>0
+    dn  = sp + rowbytes;
+    
+    // x= x, dy=delta y, rowsize=76 or 90 - these are for the inputs from lisa video ram 
     // might want to add gray detection/replacement code here too
 #ifdef USE_DOUBLE_WIDE
     #define GETPIXEL(x,ptr)       (  (double_video_bits[ptr[((x)>>4)         ]] & ( (1<<(15-((x) & 15))) )) ? black: bright  )
@@ -414,52 +431,60 @@ Later it does this per horizontal pixel
     #define GETPIXEL(x,ptr)         (  (                  ptr[((x)>>3)          ] & ( (1<<(7 -((x) &  7))) )) ? black: bright  )
 #endif
 
-    for (y=0; y<Yres; y++)
+    for (y=0; y<input_height; y++)
     {
         register int xl=x-1; // one pixel left of  x
         register int xr=x+1; // one pixel right of x
 
+        // Reset iterators at the start of each input row to the correct 2x3 output block (2x wide, 3x tall scaling)
+        {
+            int output_col = 2 * input_startx;           // Each input column produces 2 output columns
+            int output_row = 3 * (input_starty + y);     // Each input row produces 3 output rows
+            if (y == 0) {
+                // Initial setup for first row
+                p00.MoveTo(data, output_col,     output_row);     p01.MoveTo(data, output_col+1,     output_row);     p02.MoveTo(data, output_col+2,     output_row);
+                p10.MoveTo(data, output_col,     output_row + 1); p11.MoveTo(data, output_col+1, output_row + 1); p12.MoveTo(data, output_col+2, output_row + 1);
+                p20.MoveTo(data, output_col,     output_row + 2); p21.MoveTo(data, output_col+1, output_row + 2); p22.MoveTo(data, output_col+2, output_row + 2);
+            } else {
+                // Reposition all 9 iterators for this row's output blocks
+                p00.MoveTo(data, output_col,     output_row);     p01.MoveTo(data, output_col+1,     output_row);     p02.MoveTo(data, output_col+2,     output_row);
+                p10.MoveTo(data, output_col,     output_row + 1); p11.MoveTo(data, output_col+1, output_row + 1); p12.MoveTo(data, output_col+2, output_row + 1);
+                p20.MoveTo(data, output_col,     output_row + 2); p21.MoveTo(data, output_col+1, output_row + 2); p22.MoveTo(data, output_col+2, output_row + 2);
+            }
+        }
 
-        // -----------------------------------------------------------------------------------------------------
-        // to do don't update sp on every cursor right scan
-        // maybe remove yy, not sure.
-        // might be able to optimize a bit more by adding a 3rd inner loop for X
-        // where sp gets ++ on every 16 increments of x, not sure if it will make it worse
-        // might be able to turn the whole block into a macro and eliminate these two Y if
-        // statements by have 3 y blocks: one for y=0, one for loop between y=1..y<Yres-1, one for Y=Yres-1
-        // -----------------------------------------------------------------------------------------------------
-
+        // :TODO: double check if I need to worry about edge cases y=0, y=Yres-1 here
         // note that prevline is negative and it's added hence the meth below might look a bit weird if you
         // don't notice these two lines here.
-        if (y>0)      {prevline = -rowbytes; up=sp-rowbytes;} else {prevline = 0; up=sp;}
-        if (y<Yres-1) {nextline =  rowbytes; dn=sp+rowbytes;} else {nextline = 0; dn=sp;}
+        if (input_starty+y>0)      {prevline = -rowbytes; up=sp-rowbytes;} else {prevline = 0; up=sp;}
+        if (input_starty+y<Yres-1) {nextline =  rowbytes; dn=sp+rowbytes;} else {nextline = 0; dn=sp;}
 
 #ifdef USE_TRIPPLE_TALL
         for (int tripple=0; tripple<3; tripple++)
 #endif
         {
-        for (x=0; x<Xres; x++)
+        for (x=0; x<input_width; x++)
         {
 
 
 #ifdef DEBUG
-           if (x<0 || x>max_width || y<0 || y>max_height)
+           if ((input_startx+x)<0 || (input_startx+x)>max_width || (input_starty+y)<0 || (input_starty+y)>max_height)
            {
-               fprintf(stderr,"(%d,%d)write to hqx bitmap out of range(0,0)-(%d,%d)\n",x,y,max_width,max_height);
+               fprintf(stderr,"(%d,%d)write to hqx bitmap out of range(0,0)-(%d,%d)\n",(input_startx+x),(input_starty+y),max_width,max_height);
            }
 #endif
            // :TODO: maybe convert this entire set of blocks to a macro so we can skip the y==0, y==Yres-1 checks
            // and the X==0 X<Xres-1 checks - possibly premature optimization, but might be doable.
-            w[2] = GETPIXEL(x,up); //(*(sp + prevline) & (1<<(7-((x  )&7) ))) ? bright:0x00;      // w[2] = *(sp + prevline);
-            w[5] = GETPIXEL(x,sp); //(*(sp           ) & (1<<(7-((x  )&7) ))) ? bright:0x00;      // w[5] = *sp;
+            w[2] = GETPIXEL((input_startx+x),up); //(*(sp + prevline) & (1<<(7-((x  )&7) ))) ? bright:0x00;      // w[2] = *(sp + prevline);
+            w[5] = GETPIXEL((input_startx+x),sp); //(*(sp           ) & (1<<(7-((x  )&7) ))) ? bright:0x00;      // w[5] = *sp;
 
-            w[8] = GETPIXEL(x,dn); // (*(sp + nextline) & (1<<(7-((x  )&7) ))) ? bright:0x00;      // w[8] = *(sp + nextline);
+            w[8] = GETPIXEL((input_startx+x),dn); // (*(sp + nextline) & (1<<(7-((x  )&7) ))) ? bright:0x00;      // w[8] = *(sp + nextline);
 
             if (x>0) // 1,4,7 are the left column
             {
-                w[1] = GETPIXEL(x-1,up); //(*(sp + prevline) & (1<<(7-((x-1)&7) ))) ? bright:0x00;  //*(sp + prevline - 1);
-                w[4] = GETPIXEL(x-1,sp); //(*(sp           ) & (1<<(7-((x-1)&7) ))) ? bright:0x00;  //*(sp - 1);
-                w[7] = GETPIXEL(x-1,dn); //(*(sp + nextline) & (1<<(7-((x-1)&7) ))) ? bright:0x00;  //*(sp + nextline - 1);
+                w[1] = GETPIXEL((input_startx+x-1),up); //(*(sp + prevline) & (1<<(7-((x-1)&7) ))) ? bright:0x00;  //*(sp + prevline - 1);
+                w[4] = GETPIXEL((input_startx+x-1),sp); //(*(sp           ) & (1<<(7-((x-1)&7) ))) ? bright:0x00;  //*(sp - 1);
+                w[7] = GETPIXEL((input_startx+x-1),dn); //(*(sp + nextline) & (1<<(7-((x-1)&7) ))) ? bright:0x00;  //*(sp + nextline - 1);
             }
             else
             {
@@ -468,11 +493,11 @@ Later it does this per horizontal pixel
                 w[7] = w[8];
             }
 
-            if (x<Xres-1)
+            if (x<input_width-1)
             {
-                w[3] = GETPIXEL(x+1,up); //*(sp + prevline + 1);
-                w[6] = GETPIXEL(x+1,sp); //*(sp + 1);
-                w[9] = GETPIXEL(x+1,dn); //*(sp + nextline + 1);
+                w[3] = GETPIXEL((input_startx+x+1),up); //*(sp + prevline + 1);
+                w[6] = GETPIXEL((input_startx+x+1),sp); //*(sp + 1);
+                w[9] = GETPIXEL((input_startx+x+1),dn); //*(sp + nextline + 1);
             }
             else
             {
@@ -4117,29 +4142,18 @@ Later it does this per horizontal pixel
  
             }
 //            sp++; up++; dn++;
-            //dp += 3;
-            ++p00; ++p01; ++p02;    
-            ++p10; ++p11; ++p12;    
+            //dp += 2;  (for 2x output width, each input pixel produces 2x output)
+            // Advance by 2 pixels for 2x output scaling
+            ++p00; ++p01; ++p02;
+            ++p10; ++p11; ++p12;
+            ++p20; ++p21; ++p22;
+            ++p00; ++p01; ++p02;
+            ++p10; ++p11; ++p12;
             ++p20; ++p21; ++p22;
 
         }
         //sRowP += srb;
-        // next line
-        //pblock
-        p00 = p00rowStart; p00.OffsetY(data, 1); 
-        p01 = p00rowStart; p01.OffsetY(data, 1); ++p01;
-        p02 = p00rowStart; p02.OffsetY(data, 1); ++p02; ++p02;
-
-        p10 = p00rowStart; p10.OffsetY(data, 1);
-        p11 = p00rowStart; p11.OffsetY(data, 1); ++p11;
-        p12 = p00rowStart; p12.OffsetY(data, 1); ++p12; ++p12;
-
-        p20 = p00rowStart; p20.OffsetY(data, 1);
-        p21 = p00rowStart; p21.OffsetY(data, 1); ++p21;
-        p22 = p00rowStart; p22.OffsetY(data, 1); ++p22; ++p22;
-
-        // setup next rowstart
-        p00rowStart=p00;
+        // next line - no need to reset iterators here, they're set at the start of the next y iteration
 
 
         }
@@ -4164,15 +4178,15 @@ Later it does this per horizontal pixel
 HQX_API void HQX_CALLCONV hq3x_32(wxBitmap *mybitmap, int Xres, int Yres, uint32 brightness )
 {
     //uint32 rowBytesL = Xres * 4;                            // *** here here here //
-// HQX_API void HQX_CALLCONV hq3x_32_rb(       uint8 * sp, uint32 srb,     uint32 * dp, uint32 drb,       int Xres, int Yres, uint32 brightness )
-        hq3x_32_rb( 90,mybitmap, Xres,     Yres, brightness);
+// HQX_API void HQX_CALLCONV hq3x_32_rb(int startx, int starty, int width, int height, int rowbytes,  wxBitmap *mybitmap, int Xres, int Yres, uint32 brightness )
+        hq3x_32_rb( 0, 0, Xres, Yres, 90, mybitmap, Xres, Yres, brightness);
 
 }
 
 HQX_API void HQX_CALLCONV hq3x_32_3a(wxBitmap *mybitmap, int Xres, int Yres, uint32 brightness )
 {
     //uint32 rowBytesL = Xres * 4;                            // *** here here here //
-// HQX_API void HQX_CALLCONV hq3x_32_rb(       uint8 * sp, uint32 srb,     uint32 * dp, uint32 drb,       int Xres, int Yres, uint32 brightness )
-        hq3x_32_rb( 76,mybitmap,  Xres,     Yres, brightness);
+// HQX_API void HQX_CALLCONV hq3x_32_rb(int startx, int starty, int width, int height, int rowbytes,  wxBitmap *mybitmap, int Xres, int Yres, uint32 brightness )
+        hq3x_32_rb( 0, 0, Xres, Yres, 76, mybitmap, Xres, Yres, brightness);
 
 }

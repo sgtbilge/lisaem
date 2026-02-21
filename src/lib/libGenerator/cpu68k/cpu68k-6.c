@@ -18,11 +18,9 @@ void cpu_op_1032a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = 1;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -38,11 +36,9 @@ void cpu_op_1033a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !(CFLAG || ZFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -58,11 +54,9 @@ void cpu_op_1034a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = CFLAG || ZFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -78,11 +72,9 @@ void cpu_op_1035a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !CFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -98,11 +90,9 @@ void cpu_op_1036a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = CFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -118,11 +108,9 @@ void cpu_op_1037a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !ZFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -138,11 +126,9 @@ void cpu_op_1038a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = ZFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -158,11 +144,9 @@ void cpu_op_1039a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !VFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -178,11 +162,9 @@ void cpu_op_1040a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = VFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -198,11 +180,9 @@ void cpu_op_1041a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !NFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -218,11 +198,9 @@ void cpu_op_1042a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = NFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -238,11 +216,9 @@ void cpu_op_1043a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = (NFLAG == VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -258,11 +234,9 @@ void cpu_op_1044a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = (NFLAG != VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -278,11 +252,9 @@ void cpu_op_1045a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !ZFLAG && (NFLAG == VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -298,11 +270,9 @@ void cpu_op_1046a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = ZFLAG || (NFLAG != VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 4 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 4;                       }
@@ -333,11 +303,9 @@ void cpu_op_1048a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = 1;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -353,11 +321,9 @@ void cpu_op_1049a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !(CFLAG || ZFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -373,11 +339,9 @@ void cpu_op_1050a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = CFLAG || ZFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -393,11 +357,9 @@ void cpu_op_1051a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !CFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -413,11 +375,9 @@ void cpu_op_1052a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = CFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -433,11 +393,9 @@ void cpu_op_1053a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !ZFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -453,11 +411,9 @@ void cpu_op_1054a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = ZFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -473,11 +429,9 @@ void cpu_op_1055a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !VFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -493,11 +447,9 @@ void cpu_op_1056a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = VFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -513,11 +465,9 @@ void cpu_op_1057a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !NFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -533,11 +483,9 @@ void cpu_op_1058a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = NFLAG;
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -553,11 +501,9 @@ void cpu_op_1059a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = (NFLAG == VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -573,11 +519,9 @@ void cpu_op_1060a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = (NFLAG != VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -593,11 +537,9 @@ void cpu_op_1061a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = !ZFLAG && (NFLAG == VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}
@@ -613,11 +555,9 @@ void cpu_op_1062a(t_ipc *ipc) /* Bcc */ {
   uint8 cc = ZFLAG || (NFLAG != VFLAG);
 
   uint32 oldpc=PC;
-static uint32 sent;
   if (cc) {
     {  PC = (PC & 0xff000000) | (srcdata & 0x00ffffff); cpu68k_clocks+=(10-8);}
         if (oldpc==PC) {
-            if (sent!=PC) {sent=PC; fprintf(stderr,"infinite loop detected at %08x opcode length: 2 bytes\n",PC);}
             cpu68k_clocks+=10000; }
   } else
     {PC+= 2; cpu68k_clocks+=(12-8);}

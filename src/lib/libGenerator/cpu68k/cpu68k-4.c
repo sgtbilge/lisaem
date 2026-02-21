@@ -11197,7 +11197,7 @@ l1=fetchlong(ADDRREG(7));  ADDRREG(7)+= 4;
 
 ABORT_OPCODE_CHK();
   PC = l1;
-  if (!(PC)) {extern void dumpallscreenshot(void); dumpallscreenshot();}
+
 #ifdef  CHK_ABRT_OPC
   #undef CHK_ABRT_OPC   
 #endif

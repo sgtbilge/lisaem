@@ -336,6 +336,7 @@ HQX_API void HQX_CALLCONV hq3x_32_rb(int startx, int starty, int width, int heig
     int  prevline, nextline;
     uint32  w[10];                          // source pixels around center
     uint32 yuv1, yuv2;
+    uint32 mapped_y, offset_center, offset_up, offset_down;  // video buffer offset calculations
 
     uint32 bright=(brightness)<<24;
     uint32 black=0x00000000;
@@ -383,13 +384,23 @@ HQX_API void HQX_CALLCONV hq3x_32_rb(int startx, int starty, int width, int heig
     // *** need to pass these ***
     extern uint8 *lisaram;                 // pointer to Lisa RAM
     extern uint32 videolatchaddress;
+    extern int     yoffset[504];           // lookup table for pointer into video display
 
     //unused//int max_height=mybitmap->GetHeight();
     //unused//int max_width =mybitmap->GetWidth();
 
-    sp=&lisaram[videolatchaddress+(starty/3)*rowbytes]; // initially center and up are the same
-    up=&lisaram[videolatchaddress+(starty/3)*rowbytes];
-    dn=&lisaram[videolatchaddress+(starty/3)*rowbytes+rowbytes]; // down is one rowbytes line down
+    // starty is in HQX scaled coordinates (3x), convert to Lisa coordinates
+    // Use yoffset lookup table with bounds checking to prevent reading outside 32KB buffer
+    mapped_y = starty / 3;  // Convert scaled Y to Lisa Y coordinate
+    if (mapped_y >= 364) mapped_y = 363;  // Bounds check
+    
+    offset_center = (videolatchaddress + yoffset[mapped_y]) & 0x7FFF;  // & 32767 for 32KB boundary
+    offset_up     = (mapped_y > 0) ? ((videolatchaddress + yoffset[mapped_y-1]) & 0x7FFF) : offset_center;
+    offset_down   = (mapped_y < 363) ? ((videolatchaddress + yoffset[mapped_y+1]) & 0x7FFF) : offset_center;
+    
+    sp=&lisaram[offset_center];  // initially center
+    up=&lisaram[offset_up];      // and up
+    dn=&lisaram[offset_down];    // and down
 
     // x= x, dy=delta y, rowsize=76 or 90 - these are for the inputs from lisa video ram - 
     // might want to eventually add gray detection/replacement code here too
@@ -418,8 +429,20 @@ HQX_API void HQX_CALLCONV hq3x_32_rb(int startx, int starty, int width, int heig
 
         // note that prevline is negative and it's added hence the meth below might look a bit weird if you
         // don't notice these two lines here.
-        if (y/3>0)      {prevline = -rowbytes; up=sp-rowbytes;} else {prevline = 0; up=sp;}
-        if (y/3<Yres-1) {nextline =  rowbytes; dn=sp+rowbytes;} else {nextline = 0; dn=sp;}
+        // Recalculate pointers with bounds checking for each row
+        // starty starts in HQX scaled coordinates, y increments by 3 each iteration
+        mapped_y = y / 3;  // Convert current scaled Y to Lisa Y
+        if (mapped_y >= 364) mapped_y = 363;  // Bounds check
+        
+        offset_center = (videolatchaddress + yoffset[mapped_y]) & 0x7FFF;
+        offset_up     = (mapped_y > 0) ? ((videolatchaddress + yoffset[mapped_y-1]) & 0x7FFF) : offset_center;
+        offset_down   = (mapped_y < 363) ? ((videolatchaddress + yoffset[mapped_y+1]) & 0x7FFF) : offset_center;
+        
+        sp=&lisaram[offset_center];
+        up=&lisaram[offset_up];
+        dn=&lisaram[offset_down];
+        prevline = (offset_up != offset_center) ? -rowbytes : 0;
+        nextline = (offset_down != offset_center) ? rowbytes : 0;
 
         for (int tripple=0; tripple<3; tripple++) { // this loop is used to tripple each horizontal line since we do y*3
                                                     // without it there would be gaps

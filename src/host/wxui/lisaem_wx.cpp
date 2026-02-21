@@ -40,7 +40,9 @@
 
 
 // which hqx35 are we using? enable for 3x-3x - change build.sh to use hq3x-3x.cpp when enabled
-#define USE_HQX35 1
+// HQX display mode has been disabled - use AAGray instead
+// #define USE_HQX35 1
+#undef USE_HQX35
 #ifdef USE_HQX35
 #define HQX35X (720*2)
 #define HQX35Y (364*3)
@@ -171,7 +173,7 @@ long emulation_time=25;
 #endif
 
 #include <wx/rawbmp.h>
-#include <hqx.h>
+// #include <hqx.h>  // HQX display mode disabled
 
 #include <machine.h>
 #include <keyscan.h>
@@ -472,7 +474,7 @@ enum
      vidmod_raw=2,   // RePaint_SingleY
      vidmod_3y=3,    // RePaint_2X3Y
      vidmod_aag=4,   // RePaint_AAGray
-     vidmod_hq35x=5, // RePaint_HQ35X
+     // vidmod_hq35x=5, // RePaint_HQ35X - DISABLED
      vidmod_3a=0x3a  // RePaint_3A;  // consider adding 2x 3x or 4x HQX for this
 };
 
@@ -517,7 +519,7 @@ public:
       void Skins_Repaint_Floppy(wxRect &rect, DCTYPE &dc);
       void Skins_Repaint_PowerPlane(wxRect &rect, DCTYPE &dc);
 
-      int RePaint_HQ35X(int startx, int starty, int width, int height);
+      // int RePaint_HQ35X(int startx, int starty, int width, int height);  // DISABLED
       int RePaint_AAGray(int startx, int starty, int width, int height);
       int RePaint_AntiAliased(int startx, int starty, int width, int height);
 
@@ -707,7 +709,7 @@ BEGIN_EVENT_TABLE(LisaEmFrame, wxFrame)
 
     EVT_MENU(ID_VID_AA,          LisaEmFrame::OnVideoAntiAliased)
     EVT_MENU(ID_VID_AAG,         LisaEmFrame::OnVideoAAGray)
-    EVT_MENU(ID_VID_HQ35X,       LisaEmFrame::OnVideoHQ35X)
+    // EVT_MENU(ID_VID_HQ35X,       LisaEmFrame::OnVideoHQ35X)  // HQX disabled
 
     EVT_MENU(ID_VID_DY,          LisaEmFrame::OnVideoDoubleY)
     EVT_MENU(ID_VID_SY,          LisaEmFrame::OnVideoSingleY)
@@ -791,6 +793,9 @@ static wxButton  *g_fs_btn_floppy=NULL;
 static wxButton  *g_fs_btn_newfloppy=NULL;
 static wxButton  *g_fs_btn_profile=NULL;
 static wxButton  *g_fs_btn_exit_fullscreen=NULL;
+static wxPanel   *g_fs_led_power   = NULL;
+static wxPanel   *g_fs_led_floppy  = NULL;
+static wxPanel   *g_fs_led_profile = NULL;
 static int        g_fullscreen_scale_in_progress=0;
 
 static void compute_fullscreen_layout_metrics(int cw, int ch, int display_w, int display_h,
@@ -804,7 +809,7 @@ static void compute_fullscreen_layout_metrics(int cw, int ch, int display_w, int
     if (cw <= 0) cw = display_w;
     if (ch <= 0) ch = display_h;
 
-    int overlay_sidebar = 1; // Overlay controls on top of LisaWin; do not shrink viewport width.
+    int overlay_sidebar = 0; // Sidebar sits beside LisaWin; reserve its width when computing fit scale.
     int sidebar_w = sidebar_min;
     if (sidebar_w > sidebar_max) sidebar_w = sidebar_max;
     if (sidebar_w > cw - 60) sidebar_w = cw - 60;
@@ -935,7 +940,7 @@ wxBitmap  *my_poweroff =NULL;  wxMemoryDC *my_poweroffDC=NULL;
 static wxCoord screen_y_map[504];
 static wxCoord screen_to_mouse[364*3];      // 2X,3Y mode is the largest we can do
 static wxCoord screen_to_mouse_hq3x[364*3];
-static int     yoffset[504];                // lookup table for pointer into video display (to prevent multiplication)
+       int     yoffset[504];                // lookup table for pointer into video display (to prevent multiplication)
 
 
 // sets scaling lenses for hidpi, used to translate mouse and display coordinates from physical display to Lisa
@@ -1194,11 +1199,12 @@ void LisaWin::SetVideoMode(int mode)
 
   switch (mode)
   {
-   case vidmod_hq35x: buildscreenymap();      skin.screen_origin_x=0; skin.screen_origin_y=0;  
-                                              effective_lisa_vid_size_x=  _H(720);         effective_lisa_vid_size_y=  _H(500);
-                                              o_effective_lisa_vid_size_x=   720;          o_effective_lisa_vid_size_y=   500;
-                                              RePainter=&LisaWin::RePaint_HQ35X;
-                                              break;
+   // HQX display mode removed - use AAGray instead
+   // case vidmod_hq35x: buildscreenymap();      skin.screen_origin_x=0; skin.screen_origin_y=0;  
+   //                                            effective_lisa_vid_size_x=  _H(720);         effective_lisa_vid_size_y=  _H(500);
+   //                                            o_effective_lisa_vid_size_x=   720;          o_effective_lisa_vid_size_y=   500;
+   //                                            RePainter=&LisaWin::RePaint_HQ35X;
+   //                                            break;
 
    case vidmod_aag:   buildscreenymap();      skin.screen_origin_x=0; skin.screen_origin_y=0;  
                                               effective_lisa_vid_size_x=  _H(720);         effective_lisa_vid_size_y=  _H(500);
@@ -1268,8 +1274,10 @@ void LisaWin::SetVideoMode(int mode)
   {
         int x,y;
         GetSize(&x,&y);
-        skin.screen_origin_x=(x  - effective_lisa_vid_size_x)>>1;                 // center display
-        skin.screen_origin_y=(y  - effective_lisa_vid_size_y)>>1;                 // on skinless
+        int disp_w=720, disp_h=500;
+        get_layout_display_extent(&disp_w, &disp_h);
+        skin.screen_origin_x=(x  - disp_w)>>1;                                    // center display
+        skin.screen_origin_y=(y  - disp_h)>>1;                                    // on skinless
         skin.screen_origin_x= (skin.screen_origin_x<0 ? 0:skin.screen_origin_x);
         skin.screen_origin_y= (skin.screen_origin_y<0 ? 0:skin.screen_origin_y);
         ox=skin.screen_origin_x; oy=skin.screen_origin_y;
@@ -1279,6 +1287,64 @@ void LisaWin::SetVideoMode(int mode)
 
 //  ALERT_LOG(0,"o_effective_lisa_vid_x,y:%d,%d",o_effective_lisa_vid_size_x,o_effective_lisa_vid_size_y);
 set_dirty;
+
+  // In windowed mode, resize the frame so LisaWin is exactly the display size.
+  // Delta is computed from the frame's visible client area (my_lisaframe->GetClientSize),
+  // NOT from LisaWin's GetClientSize which returns the oversized canvas (padded by
+  // WINXDIFF/WINYDIFF in the constructor and therefore ~65px taller than the visible area).
+  // In fullscreen, recompute the layout/scale for the new mode's dimensions.
+  if (my_lisaframe && my_lisaframe->IsFullScreen() && !g_fullscreen_scale_in_progress)
+  {
+      update_fullscreen_buttons_layout();
+  }
+
+  if (my_lisaframe && !my_lisaframe->IsFullScreen())
+  {
+      int disp_w = 720, disp_h = 500;
+      get_layout_display_extent(&disp_w, &disp_h);
+
+      int target_w = (int)(disp_w * hidpi_scale + 0.5f);
+      int target_h = (int)(disp_h * hidpi_scale + 0.5f);
+
+      int min_w = (int)(disp_w * 0.25f + 0.5f);
+      int min_h = (int)(disp_h * 0.25f + 0.5f);
+
+      // Update min sizes BEFORE resize so wx doesn't clamp the new size.
+      SetMinSize(wxSize(min_w, min_h));                        // LisaWin canvas min
+      my_lisaframe->SetMinClientSize(wxSize(min_w, min_h));   // frame client min
+
+      // Resize the LisaWin canvas to the target (handles grow case for 2Y/3Y).
+      SetClientSize(target_w, target_h);
+
+      // Use the frame's visible client area (not LisaWin canvas) as the delta base.
+      int vis_w = 0, vis_h = 0;
+      my_lisaframe->GetClientSize(&vis_w, &vis_h);
+
+      int cur_fw = 0, cur_fh = 0;
+      my_lisaframe->GetSize(&cur_fw, &cur_fh);
+
+      fprintf(stderr,"RESIZE: mode=%d disp=%dx%d target=%dx%d vis(frame_client)=%dx%d frame_total=%dx%d hidpi=%.2f\n",
+              lisa_ui_video_mode, disp_w, disp_h, target_w, target_h, vis_w, vis_h, cur_fw, cur_fh, hidpi_scale);
+      fflush(stderr);
+
+      if (vis_w > 0 && vis_h > 0 && cur_fw > 0 && cur_fh > 0)
+      {
+          int delta_w = target_w - vis_w;
+          int delta_h = target_h - vis_h;
+          int new_fw  = cur_fw + delta_w;
+          int new_fh  = cur_fh + delta_h;
+
+          fprintf(stderr,"RESIZE: delta=%dx%d new_frame=%dx%d screen=%dx%d\n",
+                  delta_w, delta_h, new_fw, new_fh, my_lisaframe->screensizex, my_lisaframe->screensizey);
+          fflush(stderr);
+
+          // Clamp to usable screen area (screensizex/y excludes dock/menubar).
+          const int margin_w = 20, margin_h = 80;
+          if (new_fw > my_lisaframe->screensizex - margin_w) new_fw = my_lisaframe->screensizex - margin_w;
+          if (new_fh > my_lisaframe->screensizey - margin_h) new_fh = my_lisaframe->screensizey - margin_h;
+          if (new_fw > 0 && new_fh > 0) my_lisaframe->SetSize(new_fw, new_fh);
+      }
+  }
 }
 
 
@@ -1971,6 +2037,8 @@ void LisaEmFrame::OnVideoAntiAliased(wxCommandEvent& WXUNUSED(event))
     my_lisawin->SetVideoMode(vidmod_aa);
 }
 
+// HQX VIDEO MODE DISABLED - Function commented out
+/*
 void LisaEmFrame::OnVideoHQ35X(wxCommandEvent& WXUNUSED(event))
 {
     if (screensizex<IWINSIZEX || screensizey<IWINSIZEY)
@@ -1983,8 +2051,9 @@ void LisaEmFrame::OnVideoHQ35X(wxCommandEvent& WXUNUSED(event))
 
         if (screensizey<IWINSIZEY) {my_lisawin->SetVideoMode(vidmod_raw); return;}  // even still too small, go raw bits mode.
     }
-    my_lisawin->SetVideoMode(vidmod_hq35x);
+    my_lisawin->SetVideoMode(vidmod_aag);  // Use AAGray instead of HQX
 }
+*/
 
 void LisaEmFrame::OnVideoAAGray(wxCommandEvent& WXUNUSED(event))
 {
@@ -2196,11 +2265,12 @@ void prepare_skin(void)
 // :TODO: maybe convert these to C++ templates?
 #define SCALE_MENU(XscaleX)                                             \
   void LisaEmFrame::OnScale##XscaleX(  wxCommandEvent& WXUNUSED(event)) \
-       {hidpi_scale=(XscaleX/100.0);                                    \
-        save_global_prefs(); prepare_skin();                            \
-        ALERT_LOG(0,"OnScaleMenu Zoom %f",hidpi_scale);                 \
-        setvideomode(lisa_ui_video_mode);                               \
-        set_hidpi_scale(); update_menu_checkmarks(); }
+       { if (IsFullScreen()) return;                                     \
+         hidpi_scale=(XscaleX/100.0);                                   \
+         save_global_prefs(); prepare_skin();                           \
+         ALERT_LOG(0,"OnScaleMenu Zoom %f",hidpi_scale);                \
+         setvideomode(lisa_ui_video_mode);                              \
+         set_hidpi_scale(); update_menu_checkmarks(); }
         
 SCALE_MENU(25);
 SCALE_MENU(50);
@@ -2217,6 +2287,7 @@ SCALE_MENU(300);
 
 void LisaEmFrame::OnZoomIn( wxCommandEvent &event)
 {
+    if (IsFullScreen()) return;
     ALERT_LOG(0,"Zoom in from: hidpi_scale:%d",(int)(hidpi_scale * 100));
     switch((int)(hidpi_scale * 100))
     {
@@ -2240,6 +2311,7 @@ void LisaEmFrame::OnZoomIn( wxCommandEvent &event)
 
 void LisaEmFrame::OnZoomOut( wxCommandEvent &event)
 {
+    if (IsFullScreen()) return;
     ALERT_LOG(0,"zoom out from: hidpi_scale:%d",(int)(hidpi_scale * 100));
     switch((int)(hidpi_scale * 100))           // zoom out
     {
@@ -2596,7 +2668,7 @@ bool LisaEmApp::OnInit()
 
     hide_host_mouse   = (int) myConfig->Read(_T("/hidehostmouse"),(long)0);
     sound_effects_on  = (int)myConfig->Read(_T("/soundeffects"),(long)1);
-    lisa_ui_video_mode= (int)myConfig->Read(_T("/displaymode"), (long)vidmod_hq35x);
+    lisa_ui_video_mode= (int)myConfig->Read(_T("/displaymode"), (long)vidmod_aag);  // HQX disabled, use AAGray
     asciikeyboard     = (int)myConfig->Read(_T("/asciikeyboard"),(long)1);
 
     emulation_time    = (long)myConfig->Read(_T("/emutime"),(long)100);
@@ -2681,6 +2753,12 @@ bool LisaEmApp::OnInit()
 
     my_lisawin->repaintall = REPAINT_INVALID_WINDOW;
     my_lisaframe->Show(true);                // Light it up
+
+    #ifdef __WXOSX__
+    wxYield();
+    my_lisaframe->Raise();
+    #endif
+
     my_lisawin->repaintall = REPAINT_INVALID_WINDOW;
 
     wxString sndfile;
@@ -2739,6 +2817,11 @@ bool LisaEmApp::OnInit()
           ALERT_LOG(0,"on_start_fullscreen or last state was fullscreen");
         }
     setvideomode(lisa_ui_video_mode);
+
+    #ifdef __WXOSX__
+    wxYield();
+    my_lisaframe->Raise();
+    #endif
 
     ALERT_LOG(0,"OnInit Done.")
     return true;
@@ -3594,7 +3677,8 @@ static inline void getgraymap(uint16 up, uint16 val, uint16 dn,  uint8 *retval)
   retval[14]=retval[15]=graymap[(((BIT1 +BIT0 ) & up)<< 4 )|(((BIT1 +BIT0 ) & val)<< 2 ) | (((BIT1 +BIT0 ) & dn)     )]; 
 }
 
-// get the region from caller here!
+// FUNCTION DISABLED: RePaint_HQ35X - HQX display mode removed, use AAGray instead
+/*
 int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
 {
     uint32 brightness;
@@ -3637,6 +3721,7 @@ int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
 
   return fullrefresh;
 }
+*/  // END OF DISABLED RePaint_HQ35X FUNCTION
 
 
 int LisaWin::RePaint_AAGray(int startx, int starty, int endx, int endy)
@@ -3649,7 +3734,7 @@ int LisaWin::RePaint_AAGray(int startx, int starty, int endx, int endy)
     uint8  d;
 
     uint8 replacegray[16]; // ignore dumb compiler warning here!
-    dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364*3; dirty_y_max=-1;
+    dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364; dirty_y_max=-1;
 
     if (high|medium|low) high=1; // dumb way to suppress "set but not used" - should get optimized out
 
@@ -3805,7 +3890,7 @@ int LisaWin::RePaint_AntiAliased(int startx, int starty, int endx, int endy)
     uint16 val;
     uint8  d;
 
-    dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364*3; dirty_y_max=-1;
+    dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364; dirty_y_max=-1;
 
 #ifdef USE_RAW_BITMAP_ACCESS
 
@@ -4021,7 +4106,7 @@ int LisaWin::RePaint_SingleY(int startx, int starty, int endx, int endy)
     uint16 val;
     uint8  d;
 
-    dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364*3; dirty_y_max=-1;
+    dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364; dirty_y_max=-1;
 
 #ifdef USE_RAW_BITMAP_ACCESS
 
@@ -4109,7 +4194,7 @@ int LisaWin::RePaint_3A(int startx, int starty, int endx, int endy)
    uint16 val;
    uint8  d;
 
-   dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364*3; dirty_y_max=-1;
+   dirty_x_min=720; dirty_x_max=-1; dirty_y_min=364; dirty_y_max=-1;
 
 #ifdef USE_RAW_BITMAP_ACCESS
 
@@ -4470,7 +4555,8 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
       dc.DrawRectangle(0 ,0,   65535,65535);  
   }
 
-  if  (lisa_ui_video_mode==vidmod_hq35x) {
+  // HQX mode disabled
+  if  (false) {  // (lisa_ui_video_mode==vidmod_hq35x)
       if (!my_lisahq3xbitmap) {
           delete my_lisahq3xbitmap;
           delete my_memhq3xDC;
@@ -4501,11 +4587,14 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
       }
   }
 
-  ox=(logical_view_w - _H(effective_lisa_vid_size_x) ) / 2;
-  oy=(ww_height      - _H(effective_lisa_vid_size_y) ) / 2;
+  { int disp_w = 720, disp_h = 500;
+    get_layout_display_extent(&disp_w, &disp_h);
+    ox = (logical_view_w - disp_w) / 2;
+    oy = (ww_height      - disp_h) / 2; }
 
   if (ox<0 || (!skinless_center) ) ox=0;
   if (oy<0 || (!skinless_center) ) oy=0;
+
 
   skin.screen_origin_x=ox; skin.screen_origin_y=oy;
 
@@ -4576,15 +4665,9 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
       #endif
 
       switch (lisa_ui_video_mode) {
-          case  vidmod_hq35x:
-                {
-                dc.StretchBlit(  (ox+_H(e_dirty_x_min)),                   (oy+_H(e_dirty_y_min)),                         // target x,y on window
-                                 (_H(e_dirty_x_max-e_dirty_x_min)),        (_H(e_dirty_y_max-e_dirty_y_min)),              // width, height
-                                 my_memhq3xDC, //my_memhq3xDC,                                                                             // src dc
-                                 e_dirty_x_min*2,                            e_dirty_y_min               *2*500/544,       // src dc x,y
-                                 (e_dirty_x_max-e_dirty_x_min)*2,           (e_dirty_y_max-e_dirty_y_min)*2*500/544,       // src dc size
-                                  wxCOPY, false);
-                }
+          // case  vidmod_hq35x:  // HQX mode disabled
+          case 999:  // placeholder - HQX disabled
+                // No-op - HQX rendering path removed
                 break;
           case  vidmod_3y:
                 dc.StretchBlit( (ox+_H(e_dirty_x_min*2)),                     (oy+_H(e_dirty_y_min)),                      // target x,y on window
@@ -4595,6 +4678,10 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
                                 wxCOPY, false);
                 break;
           default:
+                fprintf(stderr,"AA/default paint: mode=%d canvas=(%d,%d) ww=(%d,%d) hidpi=%.3f ox=%d oy=%d dirty=(%d,%d,%d,%d) dst=(%d,%d,%d,%d)\n",
+                    (int)lisa_ui_video_mode, w_width, w_height, ww_width, ww_height, hidpi_scale, ox, oy,
+                    e_dirty_x_min, e_dirty_y_min, e_dirty_x_max, e_dirty_y_max,
+                    ox+_H(e_dirty_x_min), oy+_H(e_dirty_y_min), _H(e_dirty_x_max-e_dirty_x_min), _H(e_dirty_y_max-e_dirty_y_min));
                 dc.StretchBlit( (ox+_H(e_dirty_x_min)),                        (oy+_H(e_dirty_y_min)),                     // target x,y on window
                                 (_H(e_dirty_x_max-e_dirty_x_min)),             (_H(e_dirty_y_max-e_dirty_y_min)),          // width, height
                                 my_memDC,                                                                                  // src dc
@@ -4950,7 +5037,8 @@ void LisaWin::OnMouseMove(wxMouseEvent &event)
           xh=  pos.x;
           yh=  pos.y;
 
-          if (lisa_ui_video_mode==vidmod_hq35x)
+          // HQX mode disabled
+          if (false)  // (lisa_ui_video_mode==vidmod_hq35x)
           {
               ox=abs(w_width  - _H(720) )/2;
               oy=abs(w_height - (_H(364)*544/500 / 2 ) );
@@ -4965,10 +5053,11 @@ void LisaWin::OnMouseMove(wxMouseEvent &event)
 
     if (y<  0)                     {y=0;   mouse_in_crt=0;}
 
-    if (lisa_ui_video_mode==vidmod_hq35x)
+    // HQX mode disabled
+    if (false)  // (lisa_ui_video_mode==vidmod_hq35x)
     {
         if (y>548)                 {y=548; mouse_in_crt=0;}
-        y= screen_to_mouse_hq3x[y];
+        // y= screen_to_mouse_hq3x[y];
     }
     else
     {
@@ -5650,7 +5739,7 @@ void update_fullscreen_buttons_layout(void)
           // Use the scale from compute_fullscreen_layout_metrics (which respects sidebar_w)
           float fit_scale;
           compute_fullscreen_layout_metrics(cw, ch, display_w, display_h, NULL, NULL, &fit_scale);
-          
+
           if (fit_scale < 0.25f) fit_scale = 0.25f;
           if (fit_scale > 8.0f)  fit_scale = 8.0f;
           float delta = hidpi_scale - fit_scale;
@@ -5678,13 +5767,15 @@ void update_fullscreen_buttons_layout(void)
       return;
   }
 
-  g_fullscreen_buttons_panel->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
-  g_fullscreen_buttons_panel->SetOwnBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+  const wxColour sidebarBg(50, 50, 50);
+  g_fullscreen_buttons_panel->SetBackgroundColour(sidebarBg);
+  g_fullscreen_buttons_panel->SetOwnBackgroundColour(sidebarBg);
   g_fullscreen_buttons_panel->Show();
   g_fullscreen_buttons_panel->Raise();
 
   const int pad = 8;
   const int btn_h = 28;
+  const int led_sz = 12;
   int rail_w = sidebar_w;
   if (rail_w > 140) rail_w = 140;
   int btn_w = rail_w - pad * 2;
@@ -5693,12 +5784,47 @@ void update_fullscreen_buttons_layout(void)
   if (btn_w < 40) btn_w = 40;
   int btn_x = (rail_w - btn_w) / 2;
   if (btn_x < 0) btn_x = 0;
+
+  // Reserve space on left of button for LED indicator
+  const int led_gap = led_sz + 4;
+  int eff_btn_x = btn_x + led_gap;
+  int eff_btn_w = btn_w - led_gap;
+  const bool show_leds = (eff_btn_w >= 40);
+  if (!show_leds) { eff_btn_x = btn_x; eff_btn_w = btn_w; }
+
   int y = pad + 12;
-  if (g_fs_btn_power)           { g_fs_btn_power->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
-  if (g_fs_btn_floppy)          { g_fs_btn_floppy->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
-  if (g_fs_btn_newfloppy)       { g_fs_btn_newfloppy->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
-  if (g_fs_btn_profile)         { g_fs_btn_profile->SetSize(btn_x, y, btn_w, btn_h); y += btn_h + 8; }
-  if (g_fs_btn_exit_fullscreen) { g_fs_btn_exit_fullscreen->SetSize(btn_x, y, btn_w, btn_h); }
+  if (g_fs_btn_power)
+  {
+      if (g_fs_led_power) { if (show_leds) { g_fs_led_power->SetSize(btn_x, y + (btn_h - led_sz)/2, led_sz, led_sz); g_fs_led_power->Show(); } else g_fs_led_power->Hide(); }
+      g_fs_btn_power->SetSize(eff_btn_x, y, eff_btn_w, btn_h);
+      g_fs_btn_power->SetForegroundColour(*wxWHITE);
+      y += btn_h + 8;
+  }
+  if (g_fs_btn_floppy)
+  {
+      if (g_fs_led_floppy) { if (show_leds) { g_fs_led_floppy->SetSize(btn_x, y + (btn_h - led_sz)/2, led_sz, led_sz); g_fs_led_floppy->Show(); } else g_fs_led_floppy->Hide(); }
+      g_fs_btn_floppy->SetSize(eff_btn_x, y, eff_btn_w, btn_h);
+      g_fs_btn_floppy->SetForegroundColour(*wxWHITE);
+      y += btn_h + 8;
+  }
+  if (g_fs_btn_newfloppy)
+  {
+      g_fs_btn_newfloppy->SetSize(eff_btn_x, y, eff_btn_w, btn_h);
+      g_fs_btn_newfloppy->SetForegroundColour(*wxWHITE);
+      y += btn_h + 8;
+  }
+  if (g_fs_btn_profile)
+  {
+      if (g_fs_led_profile) { if (show_leds) { g_fs_led_profile->SetSize(btn_x, y + (btn_h - led_sz)/2, led_sz, led_sz); g_fs_led_profile->Show(); } else g_fs_led_profile->Hide(); }
+      g_fs_btn_profile->SetSize(eff_btn_x, y, eff_btn_w, btn_h);
+      g_fs_btn_profile->SetForegroundColour(*wxWHITE);
+      y += btn_h + 8;
+  }
+  if (g_fs_btn_exit_fullscreen)
+  {
+      g_fs_btn_exit_fullscreen->SetSize(eff_btn_x, y, eff_btn_w, btn_h);
+      g_fs_btn_exit_fullscreen->SetForegroundColour(*wxWHITE);
+  }
 }
 
 
@@ -5714,28 +5840,75 @@ void update_toolbar_button_states(void)
   const int tbsz = MAX(g_toolbar->GetToolBitmapSize().GetWidth(), 16);
   const int power_on = ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON) ? 1 : 0;
   const int floppy_attached = ((my_lisawin->floppystate & FLOPPY_ANIM_MASK) != FLOPPY_EMPTY) ? 1 : 0;
-  const int floppy_io_active = floppy_FDIR ? 1 : 0;
+  const int floppy_io_active_raw = floppy_FDIR ? 1 : 0;
   const int floppy_fn = (int)floppy_ram[1]; // controller FUNCTION register
-  const int floppy_writing = (floppy_io_active && (floppy_fn == 0x01 || floppy_fn == 0x08)) ? 1 : 0; // write/writx
+  const int floppy_writing_raw = (floppy_io_active_raw && (floppy_fn == 0x01 || floppy_fn == 0x08)) ? 1 : 0; // write/writx
+  const long now_ms = my_lisaframe->runtime.Time();
+  static long last_floppy_io_ms = -100000;
+  static int last_floppy_write_dir = 0;
+  if (floppy_io_active_raw)
+  {
+      last_floppy_io_ms = now_ms;
+      last_floppy_write_dir = floppy_writing_raw;
+  }
+  if (!floppy_attached)
+  {
+      last_floppy_io_ms = -100000;
+      last_floppy_write_dir = 0;
+  }
+  // FDIR can pulse quickly; keep state visible briefly so users can actually see it.
+  const int floppy_io_active = (floppy_attached && (now_ms - last_floppy_io_ms) <= 500) ? 1 : 0;
+  const int floppy_writing = floppy_io_active ? last_floppy_write_dir : 0;
   const int profile_editable = (my_lisaframe->running == emulation_off) ? 1 : 0;
+
+  // ProFile I/O detection: scan VIAs 2-8 (2=motherboard, 3-8=slots)
+  // StateMachineStep==0 means idle; states 7-9 are write phases.
+  static long last_profile_io_ms = -100000;
+  static int  last_profile_write_dir = 0;
+  int profile_io_active_raw = 0;
+  int profile_writing_raw   = 0;
+  for (int pvi = 2; pvi <= 8; pvi++)
+  {
+      ProFileType *pf = via[pvi].ProFile;
+      if (!pf) continue;
+      if (pf->StateMachineStep != 0)
+      {
+          profile_io_active_raw = 1;
+          if ((pf->StateMachineStep >= 7 && pf->StateMachineStep <= 9) ||
+              pf->DataBlock[4] == 1 || pf->DataBlock[4] == 2)
+              profile_writing_raw = 1;
+          break;
+      }
+  }
+  if (profile_io_active_raw) { last_profile_io_ms = now_ms; last_profile_write_dir = profile_writing_raw; }
+  if (profile_editable)        last_profile_io_ms = -100000; // reset hold when machine powers off
+  const int profile_io_active  = ((now_ms - last_profile_io_ms) <= 500) ? 1 : 0;
+  const int profile_io_writing = profile_io_active ? last_profile_write_dir : 0;
 
   static int last_power_on = -1;
   static int last_floppy_attached = -1;
   static int last_floppy_io_active = -1;
   static int last_floppy_writing = -1;
   static int last_profile_editable = -1;
+  static int last_profile_io_active = -1;
+  static int last_profile_io_writing = -1;
   bool changed = false;
 
   if (power_on != last_power_on)
   {
       wxBitmap powerBmp(tbsz, tbsz);
       wxMemoryDC dc(powerBmp);
-      dc.SetBackground(*wxBLACK_BRUSH);
+      const wxColour tbBg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+      dc.SetBackground(wxBrush(tbBg));
       dc.Clear();
       wxColour pcol = power_on ? wxColour(0, 210, 0) : wxColour(120, 40, 40);
-      dc.SetBrush(wxBrush(pcol));
-      dc.SetPen(wxPen(pcol));
-      dc.DrawCircle(tbsz/2, tbsz/2, tbsz/3);
+      int cx = tbsz/2, cy = tbsz/2, r = tbsz*3/8;
+      int lw = MAX(2, tbsz/8);
+      dc.SetPen(wxPen(pcol, lw));
+      dc.DrawLine(cx, cy, cx, cy - r - 2);
+      dc.SetBrush(*wxTRANSPARENT_BRUSH);
+      int gx = (int)(r * 0.5f), gy = (int)(r * 0.866f);
+      dc.DrawArc(cx - gx, cy - gy, cx + gx, cy - gy, cx, cy);
       dc.SelectObject(wxNullBitmap);
 
       g_toolbar->SetToolNormalBitmap(ID_TOOLBAR_POWER, powerBmp);
@@ -5744,6 +5917,11 @@ void update_toolbar_button_states(void)
       changed = true;
   }
   if (g_fs_btn_power) g_fs_btn_power->SetLabel(power_on ? wxT("Power Off") : wxT("Power On"));
+  if (g_fs_led_power)
+  {
+      g_fs_led_power->SetBackgroundColour(power_on ? wxColour(0,210,0) : wxColour(120,40,40));
+      g_fs_led_power->Refresh();
+  }
 
   if (floppy_attached != last_floppy_attached ||
       floppy_io_active != last_floppy_io_active ||
@@ -5757,14 +5935,20 @@ void update_toolbar_button_states(void)
 
       wxBitmap floppyBmp(tbsz, tbsz);
       wxMemoryDC dc(floppyBmp);
-      dc.SetBackground(*wxBLACK_BRUSH);
+      const wxColour tbBg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+      dc.SetBackground(wxBrush(tbBg));
       dc.Clear();
-      dc.SetBrush(wxBrush(body));
-      dc.SetPen(wxPen(body));
-      dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
-      dc.SetPen(wxPen(*wxWHITE, 2));
-      dc.DrawLine(tbsz/2, tbsz/4, tbsz/2, tbsz*3/4);
-      dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
+      int m = MAX(2, tbsz/8);
+      dc.SetBrush(wxBrush(body)); dc.SetPen(wxPen(body));
+      dc.DrawRectangle(m, m, tbsz-2*m, tbsz-2*m);
+      int slideW = (tbsz-2*m)*5/8, slideH = MAX(3, tbsz/6);
+      int slideX = m + (tbsz-2*m-slideW)/2;
+      dc.SetBrush(*wxBLACK_BRUSH); dc.SetPen(*wxBLACK_PEN);
+      dc.DrawRectangle(slideX, m, slideW, slideH);
+      int lbT = m + tbsz/4;
+      wxColour lbCol(MIN(255,body.Red()+60), MIN(255,body.Green()+60), MIN(255,body.Blue()+60));
+      dc.SetBrush(wxBrush(lbCol)); dc.SetPen(wxPen(lbCol));
+      dc.DrawRoundedRectangle(m+2, lbT, tbsz-2*m-4, tbsz/3, 1);
       dc.SelectObject(wxNullBitmap);
 
       g_toolbar->SetToolNormalBitmap(ID_TOOLBAR_FLOPPY, floppyBmp);
@@ -5785,34 +5969,78 @@ void update_toolbar_button_states(void)
       else if (floppy_attached)                    ioState = wxT("Attached");
       g_fs_btn_floppy->SetLabel(wxString::Format(wxT("Disk: %s"), ioState));
   }
+  if (g_fs_led_floppy)
+  {
+      wxColour ledcol(80, 80, 220); // blue = empty
+      if (floppy_attached)                          ledcol = wxColour(90, 180, 90);
+      if (floppy_io_active && !floppy_writing)      ledcol = wxColour(220, 180, 60);
+      if (floppy_io_active &&  floppy_writing)      ledcol = wxColour(220, 80, 80);
+      g_fs_led_floppy->SetBackgroundColour(ledcol);
+      g_fs_led_floppy->Refresh();
+  }
   if (g_fs_btn_newfloppy) g_fs_btn_newfloppy->SetLabel(wxT("New Disk"));
 
-  if (profile_editable != last_profile_editable)
+  if (profile_editable    != last_profile_editable ||
+      profile_io_active   != last_profile_io_active ||
+      profile_io_writing  != last_profile_io_writing)
   {
+      wxColour pcol;
+      if      (profile_editable)                             pcol = wxColour(180,120,60); // tan   = machine off/configurable
+      else if (profile_io_active && profile_io_writing)      pcol = wxColour(220,80,80);  // red   = writing
+      else if (profile_io_active && !profile_io_writing)     pcol = wxColour(220,180,60); // yellow = reading
+      else                                                   pcol = wxColour(80,80,80);   // gray  = locked/idle
+
       wxBitmap profileBmp(tbsz, tbsz);
       wxMemoryDC dc(profileBmp);
-      dc.SetBackground(*wxBLACK_BRUSH);
+      const wxColour tbBg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+      dc.SetBackground(wxBrush(tbBg));
       dc.Clear();
-      wxColour pcol = profile_editable ? wxColour(180,120,60) : wxColour(80,80,80);
-      dc.SetBrush(wxBrush(pcol));
-      dc.SetPen(wxPen(pcol));
-      dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
-      dc.SetPen(wxPen(*wxWHITE, 2));
-      dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
+      int m = MAX(2, tbsz/8);
+      int ellH = MAX(4, tbsz/4);
+      int bodyH = tbsz - 2*m - ellH/2;
+      dc.SetBrush(wxBrush(pcol)); dc.SetPen(wxPen(pcol));
+      dc.DrawRectangle(m, m + ellH/2, tbsz-2*m, bodyH);
+      wxColour dark(pcol.Red()*7/10, pcol.Green()*7/10, pcol.Blue()*7/10);
+      dc.SetBrush(wxBrush(dark)); dc.SetPen(wxPen(dark));
+      dc.DrawEllipse(m, m + bodyH, tbsz-2*m, ellH);
+      wxColour lite(MIN(255,pcol.Red()+40), MIN(255,pcol.Green()+40), MIN(255,pcol.Blue()+40));
+      dc.SetBrush(wxBrush(lite)); dc.SetPen(wxPen(lite));
+      dc.DrawEllipse(m, m, tbsz-2*m, ellH);
       dc.SelectObject(wxNullBitmap);
+
+      wxString tip;
+      if      (profile_editable)           tip = wxT("Configure ProFile drives");
+      else if (profile_io_active && profile_io_writing)  tip = wxT("ProFile: Writing");
+      else if (profile_io_active)          tip = wxT("ProFile: Reading");
+      else                                 tip = wxT("Power off Lisa to configure ProFile drives");
 
       g_toolbar->SetToolNormalBitmap(ID_TOOLBAR_PROFILE, profileBmp);
       g_toolbar->EnableTool(ID_TOOLBAR_PROFILE, profile_editable != 0);
-      g_toolbar->SetToolShortHelp(ID_TOOLBAR_PROFILE,
-                                  profile_editable ? wxT("Configure ProFile drives")
-                                                   : wxT("Power off Lisa to configure ProFile drives"));
-      last_profile_editable = profile_editable;
+      g_toolbar->SetToolShortHelp(ID_TOOLBAR_PROFILE, tip);
+      last_profile_editable   = profile_editable;
+      last_profile_io_active  = profile_io_active;
+      last_profile_io_writing = profile_io_writing;
       changed = true;
   }
   if (g_fs_btn_profile)
   {
-      g_fs_btn_profile->SetLabel(profile_editable ? wxT("Profile") : wxT("Profile (Locked)"));
+      wxString lbl;
+      if      (profile_editable)                         lbl = wxT("Profile");
+      else if (profile_io_active && profile_io_writing)  lbl = wxT("Profile: Writing");
+      else if (profile_io_active)                        lbl = wxT("Profile: Reading");
+      else                                               lbl = wxT("Profile (Locked)");
+      g_fs_btn_profile->SetLabel(lbl);
       g_fs_btn_profile->Enable(profile_editable != 0);
+  }
+  if (g_fs_led_profile)
+  {
+      wxColour ledcol;
+      if      (profile_editable)                         ledcol = wxColour(180,120,60);
+      else if (profile_io_active && profile_io_writing)  ledcol = wxColour(220,80,80);
+      else if (profile_io_active)                        ledcol = wxColour(220,180,60);
+      else                                               ledcol = wxColour(80,80,80);
+      g_fs_led_profile->SetBackgroundColour(ledcol);
+      g_fs_led_profile->Refresh();
   }
 
   if (my_lisaframe->GetStatusBar() && my_lisaframe->GetStatusBar()->GetFieldsCount() > 1)
@@ -5848,14 +6076,14 @@ void update_menu_checkmarks(void)
       {
         DisplayMenu->Enable(ID_VID_AA,   lisa_ui_video_mode != 0x3a);
         DisplayMenu->Enable(ID_VID_AAG,  lisa_ui_video_mode != 0x3a);
-        DisplayMenu->Enable(ID_VID_HQ35X,lisa_ui_video_mode != 0x3a);
+        // DisplayMenu->Enable(ID_VID_HQ35X,lisa_ui_video_mode != 0x3a);  // HQX disabled
         DisplayMenu->Enable(ID_VID_DY,   lisa_ui_video_mode != 0x3a);
         DisplayMenu->Enable(ID_VID_SY,   lisa_ui_video_mode != 0x3a);
         DisplayMenu->Enable(ID_VID_2X3Y, lisa_ui_video_mode != 0x3a);
 
         DisplayMenu->Check(ID_VID_AA,    (lisa_ui_video_mode == vidmod_aa)  );
         DisplayMenu->Check(ID_VID_AAG,   (lisa_ui_video_mode == vidmod_aag) );
-        DisplayMenu->Check(ID_VID_HQ35X, (lisa_ui_video_mode == vidmod_hq35x) );
+        // DisplayMenu->Check(ID_VID_HQ35X, (lisa_ui_video_mode == vidmod_hq35x) );  // HQX disabled
 
         DisplayMenu->Check(ID_VID_DY,    (lisa_ui_video_mode == vidmod_2y)  );
         DisplayMenu->Check(ID_VID_SY,    (lisa_ui_video_mode == vidmod_raw) );
@@ -6532,7 +6760,7 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     DisplayScaleSub->Append(ID_VID_SCALE_ZOOMIN,         wxT("Zoom In \tCtrl-+"),   wxT("Zoom In") );
     DisplayScaleSub->Append(ID_VID_SCALE_ZOOMOUT,        wxT("Zoom Out \tCtrl--"),  wxT("Zoom Out") );
 
-    DisplayMenu->AppendRadioItem(ID_VID_HQ35X ,       wxT("HQX Upscaler")          ,  wxT("Aspect Corrected High Quality Magnification Filer hq3.5x") );
+    // DisplayMenu->AppendRadioItem(ID_VID_HQ35X ,       wxT("HQX Upscaler")          ,  wxT("Aspect Corrected High Quality Magnification Filer hq3.5x") );  // HQX disabled
     DisplayMenu->AppendRadioItem(ID_VID_AA  ,         wxT("AntiAliased")           ,  wxT("Aspect Corrected with Anti Aliasing") );
     DisplayMenu->AppendRadioItem(ID_VID_AAG ,         wxT("AntiAliased with Gray Replacement"),  wxT("Aspect Corrected with Anti Aliasing and Gray Replacing") );
     DisplayMenu->AppendRadioItem(ID_VID_SY  ,         wxT("Raw")                   ,  wxT("Uncorrected Aspect Ratio") );
@@ -6704,41 +6932,77 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
         wxSize tsz = toolbar->GetToolBitmapSize();
         int tbsz = (tsz.GetWidth() > 0) ? tsz.GetWidth() : 24;
 
-        // Power button: green circle
+        const wxColour tbBg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+
+        // Power button: power-ring symbol (arc + vertical stem), green = on
         wxBitmap powerBmp(tbsz, tbsz);
         { wxMemoryDC dc(powerBmp);
-          dc.SetBackground(*wxBLACK_BRUSH); dc.Clear();
-          dc.SetBrush(*wxGREEN_BRUSH); dc.SetPen(*wxGREEN_PEN);
-          dc.DrawCircle(tbsz/2, tbsz/2, tbsz/3);
+          dc.SetBackground(wxBrush(tbBg)); dc.Clear();
+          wxColour pcol(0, 210, 0);
+          int cx = tbsz/2, cy = tbsz/2, r = tbsz*3/8;
+          int lw = MAX(2, tbsz/8);
+          dc.SetPen(wxPen(pcol, lw));
+          dc.DrawLine(cx, cy, cx, cy - r - 2);
+          dc.SetBrush(*wxTRANSPARENT_BRUSH);
+          int gx = (int)(r * 0.5f), gy = (int)(r * 0.866f);
+          dc.DrawArc(cx - gx, cy - gy, cx + gx, cy - gy, cx, cy);
           dc.SelectObject(wxNullBitmap);
         }
-        // Floppy: blue rectangle
+        // Floppy: floppy disk silhouette, blue = empty
         wxBitmap floppyBmp(tbsz, tbsz);
         { wxMemoryDC dc(floppyBmp);
-          dc.SetBackground(*wxBLACK_BRUSH); dc.Clear();
-          dc.SetBrush(wxBrush(wxColour(80,80,220))); dc.SetPen(wxPen(wxColour(80,80,220)));
-          dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
+          dc.SetBackground(wxBrush(tbBg)); dc.Clear();
+          wxColour body(80, 80, 220);
+          int m = MAX(2, tbsz/8);
+          dc.SetBrush(wxBrush(body)); dc.SetPen(wxPen(body));
+          dc.DrawRectangle(m, m, tbsz-2*m, tbsz-2*m);
+          int slideW = (tbsz-2*m)*5/8, slideH = MAX(3, tbsz/6);
+          int slideX = m + (tbsz-2*m-slideW)/2;
+          dc.SetBrush(*wxBLACK_BRUSH); dc.SetPen(*wxBLACK_PEN);
+          dc.DrawRectangle(slideX, m, slideW, slideH);
+          int lbT = m + tbsz/4;
+          wxColour lbCol(MIN(255,body.Red()+60), MIN(255,body.Green()+60), MIN(255,body.Blue()+60));
+          dc.SetBrush(wxBrush(lbCol)); dc.SetPen(wxPen(lbCol));
+          dc.DrawRoundedRectangle(m+2, lbT, tbsz-2*m-4, tbsz/3, 1);
           dc.SelectObject(wxNullBitmap);
         }
-        // New floppy: blue rect with white +
+        // New floppy: same disk + white "+"
         wxBitmap newFloppyBmp(tbsz, tbsz);
         { wxMemoryDC dc(newFloppyBmp);
-          dc.SetBackground(*wxBLACK_BRUSH); dc.Clear();
-          dc.SetBrush(wxBrush(wxColour(80,80,220))); dc.SetPen(wxPen(wxColour(80,80,220)));
-          dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
-          dc.SetPen(wxPen(*wxWHITE, 2));
+          dc.SetBackground(wxBrush(tbBg)); dc.Clear();
+          wxColour body(80, 80, 220);
+          int m = MAX(2, tbsz/8);
+          dc.SetBrush(wxBrush(body)); dc.SetPen(wxPen(body));
+          dc.DrawRectangle(m, m, tbsz-2*m, tbsz-2*m);
+          int slideW = (tbsz-2*m)*5/8, slideH = MAX(3, tbsz/6);
+          int slideX = m + (tbsz-2*m-slideW)/2;
+          dc.SetBrush(*wxBLACK_BRUSH); dc.SetPen(*wxBLACK_PEN);
+          dc.DrawRectangle(slideX, m, slideW, slideH);
+          int lbT = m + tbsz/4;
+          wxColour lbCol(MIN(255,body.Red()+60), MIN(255,body.Green()+60), MIN(255,body.Blue()+60));
+          dc.SetBrush(wxBrush(lbCol)); dc.SetPen(wxPen(lbCol));
+          dc.DrawRoundedRectangle(m+2, lbT, tbsz-2*m-4, tbsz/3, 1);
+          dc.SetPen(wxPen(*wxWHITE, MAX(2, tbsz/10)));
           dc.DrawLine(tbsz/2, tbsz/4, tbsz/2, tbsz*3/4);
           dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
           dc.SelectObject(wxNullBitmap);
         }
-        // Profile: amber rectangle with white bar
+        // Profile: hard drive cylinder (stack-of-disks shape)
         wxBitmap profileBmp(tbsz, tbsz);
         { wxMemoryDC dc(profileBmp);
-          dc.SetBackground(*wxBLACK_BRUSH); dc.Clear();
-          dc.SetBrush(wxBrush(wxColour(180,120,60))); dc.SetPen(wxPen(wxColour(180,120,60)));
-          dc.DrawRoundedRectangle(2, 2, tbsz-4, tbsz-4, 3);
-          dc.SetPen(wxPen(*wxWHITE, 2));
-          dc.DrawLine(tbsz/4, tbsz/2, tbsz*3/4, tbsz/2);
+          dc.SetBackground(wxBrush(tbBg)); dc.Clear();
+          wxColour pcol(180, 120, 60);  // tan = editable at launch
+          int m = MAX(2, tbsz/8);
+          int ellH = MAX(4, tbsz/4);
+          int bodyH = tbsz - 2*m - ellH/2;
+          dc.SetBrush(wxBrush(pcol)); dc.SetPen(wxPen(pcol));
+          dc.DrawRectangle(m, m + ellH/2, tbsz-2*m, bodyH);
+          wxColour dark(pcol.Red()*7/10, pcol.Green()*7/10, pcol.Blue()*7/10);
+          dc.SetBrush(wxBrush(dark)); dc.SetPen(wxPen(dark));
+          dc.DrawEllipse(m, m + bodyH, tbsz-2*m, ellH);
+          wxColour lite(MIN(255,pcol.Red()+40), MIN(255,pcol.Green()+40), MIN(255,pcol.Blue()+40));
+          dc.SetBrush(wxBrush(lite)); dc.SetPen(wxPen(lite));
+          dc.DrawEllipse(m, m, tbsz-2*m, ellH);
           dc.SelectObject(wxNullBitmap);
         }
 
@@ -6752,13 +7016,30 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     if (!g_fullscreen_buttons_panel)
     {
         g_fullscreen_buttons_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(180, 320));
-        g_fullscreen_buttons_panel->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
-        g_fullscreen_buttons_panel->SetOwnBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+        const wxColour sidebarBg(50, 50, 50);
+        g_fullscreen_buttons_panel->SetBackgroundColour(sidebarBg);
+        g_fullscreen_buttons_panel->SetOwnBackgroundColour(sidebarBg);
+
         g_fs_btn_power = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Power"));
+        g_fs_btn_power->SetForegroundColour(*wxWHITE);
+        g_fs_led_power = new wxPanel(g_fullscreen_buttons_panel, wxID_ANY, wxDefaultPosition, wxSize(12,12));
+        g_fs_led_power->SetBackgroundColour(wxColour(120,40,40)); // red = off initially
+
         g_fs_btn_floppy = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Insert Disk"));
+        g_fs_btn_floppy->SetForegroundColour(*wxWHITE);
+        g_fs_led_floppy = new wxPanel(g_fullscreen_buttons_panel, wxID_ANY, wxDefaultPosition, wxSize(12,12));
+        g_fs_led_floppy->SetBackgroundColour(wxColour(80,80,220)); // blue = empty initially
+
         g_fs_btn_newfloppy = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("New Disk"));
+        g_fs_btn_newfloppy->SetForegroundColour(*wxWHITE);
+
         g_fs_btn_profile = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Profile"));
+        g_fs_btn_profile->SetForegroundColour(*wxWHITE);
+        g_fs_led_profile = new wxPanel(g_fullscreen_buttons_panel, wxID_ANY, wxDefaultPosition, wxSize(12,12));
+        g_fs_led_profile->SetBackgroundColour(wxColour(180,120,60)); // tan = editable initially
+
         g_fs_btn_exit_fullscreen = new wxButton(g_fullscreen_buttons_panel, wxID_ANY, wxT("Exit Fullscreen"));
+        g_fs_btn_exit_fullscreen->SetForegroundColour(*wxWHITE);
 
         g_fs_btn_power->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { handle_powerbutton(); });
         g_fs_btn_floppy->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnxFLOPPY(); });
@@ -6913,10 +7194,11 @@ void LisaEmFrame::OnScreenshot(wxCommandEvent& event)
 
         description = _T("Save RAW Screenshot");
         ALERT_LOG(0,"Raw Screenshot");
-        if (lisa_ui_video_mode == vidmod_hq35x) {
+        // HQX mode disabled
+        if (false) {  // (lisa_ui_video_mode == vidmod_hq35x)
            image = new class wxImage(my_lisahq3xbitmap->ConvertToImage());
         }
-        else
+        // Always use AAGray path
         {
           image = new class wxImage(lisa_vid_size_x, lisa_vid_size_y, true);
           for ( int yi=0; yi < lisa_vid_size_y; yi++)
@@ -6934,18 +7216,19 @@ void LisaEmFrame::OnScreenshot(wxCommandEvent& event)
                 wxMemoryDC *dc=NULL;
                 dc=new class wxMemoryDC;
 
-                if (lisa_ui_video_mode == vidmod_hq35x) {
-                    bitmap=new class wxBitmap(_H(720),_H(364)*HQ3XYSCALE,DEPTH);
-                    dc->SelectObject(*bitmap);
-
-                    ALERT_LOG(0,"HQ3X Screenshot");
-
-                    hq3x_32_rb(0,0,720*2,364*3, 90, my_lisabitmap, 720,364, 0xe0);
-                    dc->StretchBlit(0,0,   // target x,y
-                                    _H(720),_H(364)*HQ3XYSCALE,     // size w,h
-                                      my_memDC, 0,0, 720,364,
-                                      wxCOPY, false);
-                    image = new class wxImage(bitmap->ConvertToImage());
+                // HQX mode disabled
+                if (false) {  // (lisa_ui_video_mode == vidmod_hq35x)
+                    // bitmap=new class wxBitmap(_H(720),_H(364)*HQ3XYSCALE,DEPTH);
+                    // dc->SelectObject(*bitmap);
+                    // 
+                    // ALERT_LOG(0,"HQ3X Screenshot");
+                    // 
+                    // hq3x_32_rb(0,0,720*2,364*3, 90, my_lisabitmap, 720,364, 0xe0);
+                    // dc->StretchBlit(0,0,   // target x,y
+                    //                 _H(720),_H(364)*HQ3XYSCALE,     // size w,h
+                    //                   my_memDC, 0,0, 720,364,
+                    //                   wxCOPY, false);
+                    // image = new class wxImage(bitmap->ConvertToImage());
                 }
                 else
                 {
