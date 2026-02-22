@@ -517,17 +517,17 @@ public:
       void Skins_Repaint_Floppy(wxRect &rect, DCTYPE &dc);
       void Skins_Repaint_PowerPlane(wxRect &rect, DCTYPE &dc);
 
-      int RePaint_HQ35X(int startx, int starty, int width, int height);
-      int RePaint_AAGray(int startx, int starty, int width, int height);
-      int RePaint_AntiAliased(int startx, int starty, int width, int height);
+      int RePaint_HQ35X(void);
+      int RePaint_AAGray(void);
+      int RePaint_AntiAliased(void);
 
-      int RePaint_DoubleY(int startx, int starty, int width, int height);
-      int RePaint_SingleY(int startx, int starty, int width, int height);
-      
-      int RePaint_3A(int startx, int starty, int width, int height);
-      int RePaint_2X3Y(int startx, int starty, int width, int height);
+      int RePaint_DoubleY(void);
+      int RePaint_SingleY(void);
 
-      int (LisaWin::*RePainter)(int startx, int starty, int width, int height);   // pointer method to one of the above
+      int RePaint_3A(void);
+      int RePaint_2X3Y(void);
+
+      int (LisaWin::*RePainter)(void);   // pointer method to one of the above
 
       void SetVideoMode(int mode);
 
@@ -1689,7 +1689,7 @@ bool DnDFile::OnDropFiles(wxCoord x, wxCoord y, const wxArrayString& filenames)
 #endif // wxUSE_DRAG_AND_DROP
 
 
-void LisaEmFrame::OnEmulationTimer(wxTimerEvent& event)
+void LisaEmFrame::OnEmulationTimer(wxTimerEvent& WXUNUSED(event))
 {
   long now=runtime.Time();
   long idleentry=now;
@@ -3670,7 +3670,7 @@ static inline void getgraymap(uint16 up, uint16 val, uint16 dn,  uint8 *retval)
   retval[14]=retval[15]=graymap[(((BIT1 +BIT0 ) & up)<< 4 )|(((BIT1 +BIT0 ) & val)<< 2 ) | (((BIT1 +BIT0 ) & dn)     )]; 
 }
 
-int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
+int LisaWin::RePaint_HQ35X(void)
 {
     uint32 brightness;
     int fullrefresh=0;
@@ -3713,7 +3713,7 @@ int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
 }
 
 
-int LisaWin::RePaint_AAGray(int startx, int starty, int endx, int endy)
+int LisaWin::RePaint_AAGray(void)
 {
     // vars for SETRGB16  
     int updated=0;    
@@ -3871,7 +3871,7 @@ return 1;
 ////////////////// GETRGB MACRO ENDS ///////////////////////////////////////////////////////////////////
 
 
-int LisaWin::RePaint_AntiAliased(int startx, int starty, int endx, int endy)
+int LisaWin::RePaint_AntiAliased(void)
 {
     // vars for SETRGB16  
     int updated=0;    
@@ -4087,7 +4087,7 @@ int LisaWin::RePaint_AntiAliased(int startx, int starty, int endx, int endy)
 }                                                                                                     //
 ////////////////// SETRGB MACRO ENDS ///////////////////////////////////////////////////////////////////
 
-int LisaWin::RePaint_SingleY(int startx, int starty, int endx, int endy)
+int LisaWin::RePaint_SingleY(void)
 {
     // vars for SETRGB16_RAW
     int updated=0;    
@@ -4175,7 +4175,7 @@ int LisaWin::RePaint_SingleY(int startx, int starty, int endx, int endy)
 }
 
 // this is essentially the same as SingleY, only for a differently sized display.
-int LisaWin::RePaint_3A(int startx, int starty, int endx, int endy)
+int LisaWin::RePaint_3A(void)
 {
    // vars for SETRGB16_RAW
    int updated=0;    
@@ -4254,7 +4254,7 @@ return 1;
 
 
 // no skins here.
-int LisaWin::RePaint_DoubleY(int startx, int starty, int endx, int endy)
+int LisaWin::RePaint_DoubleY(void)
 {
    // vars for SETRGB16_RAW
     int updated=0;    
@@ -4359,7 +4359,7 @@ return 1;
 }
 
 
-int LisaWin::RePaint_2X3Y(int startx, int starty, int endx, int endy)
+int LisaWin::RePaint_2X3Y(void)
 {
        // vars for SETRGB16_RAW
       int    updated=0;    
@@ -4638,7 +4638,7 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
 
       if  ((dirtyscreen || videoramdirty) && (powerstate & POWER_ON_MASK) == POWER_ON)  {   
   //       ALERT_LOG(0,"Calling repainter... (%d,%d):%d,%d",rect.GetX(),rect.GetY(),rect.GetWidth(),rect.GetHeight() );
-           fullrefresh=(my_lisawin->*RePainter)(rect.GetX(),rect.GetY(),rect.GetWidth(),rect.GetHeight()); }
+           fullrefresh=(my_lisawin->*RePainter)(); }
       else  {ALERT_LOG(0,"skipping repaint");}
             // ^ whoever came up with this C++ syntax instead of the old C one was on crack!
 
@@ -4712,7 +4712,7 @@ void LisaWin::Skins_Repaint_Floppy(wxRect& WXUNUSED(rect), DCTYPE & WXUNUSED(dc)
     return; // skins removed - no-op
 }
 
-int LisaWin::OnPaint_skins(wxRect &rect, DCTYPE &dc)
+int LisaWin::OnPaint_skins(wxRect & /*rect*/, DCTYPE & /*dc*/)
 {
     return 0; // skins removed - no-op
 }
@@ -5537,7 +5537,7 @@ void LisaEmFrame::OnAPPLEPOWERKEY(wxCommandEvent& WXUNUSED(event))
 
 #ifdef DEBUG
 
-void LisaEmFrame::LisaEmFrame::DumpAllScreenshot(wxCommandEvent& WXUNUSED(event)) {dumpallscreenshot();}
+void LisaEmFrame::DumpAllScreenshot(wxCommandEvent& WXUNUSED(event)) {dumpallscreenshot();}
 
 void LisaEmFrame::OnTraceLog(wxCommandEvent& WXUNUSED(event))
     {
@@ -7368,7 +7368,7 @@ extern "C" void update_profile_preferences_path(char *newfilename) {
 
 
 // Connects a printer/profile to the specified VIA - 2021.08.24 added profile_prefs_path to save the preferences it came from.
-void connect_device_to_via(int v, wxString device, wxString *file, wxString profile_prefs_path)
+void connect_device_to_via(int v, wxString device, wxString *file, wxString /*profile_prefs_path*/)
 {
     char tmp[MAXPATHLEN];
     char *t;
