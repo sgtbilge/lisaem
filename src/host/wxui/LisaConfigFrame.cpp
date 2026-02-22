@@ -32,6 +32,7 @@
 #include <wx/panel.h>
 #include <wx/notebook.h>
 #include <wx/filename.h>
+#include <wx/stdpaths.h>
 
 #include "machine.h"
 
@@ -62,6 +63,40 @@ extern void turn_skins_on(void);
 extern void turn_skins_off(void);
 
 extern "C" float hidpi_scale;
+
+static wxString normalize_user_path(wxString value)
+{
+    value.Trim();
+    value.Trim(false);
+    if (value.IsEmpty()) return value;
+
+    value = wxExpandEnvVars(value);
+
+    if (value == _T("~"))
+    {
+        return wxGetHomeDir();
+    }
+
+    if (value.StartsWith(_T("~/")))
+    {
+        wxString home = wxGetHomeDir();
+        if (home.EndsWith(_T("/"))) home.RemoveLast();
+        return home + value.Mid(1);
+    }
+
+    return value;
+}
+
+static wxString get_default_profile_disks_dir()
+{
+    wxStandardPathsBase& stdp = wxStandardPaths::Get();
+    wxString sep = wxFileName::GetPathSeparator(wxPATH_NATIVE);
+    wxString dir = stdp.GetUserDataDir() + sep + _T("PROFILE_DISKS");
+
+    if (!wxFileName::DirExists(dir)) wxFileName::Mkdir(dir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL);
+
+    return dir;
+}
 
 // fix for hidpi_scale <1.0 after 2020.01.26 changes
 #define HIDPISCALE (hidpi_scale<1.0 ? 1.0 : hidpi_scale)
@@ -133,7 +168,7 @@ const int idbl[4]={0, ID_PICK_PROFILESB1L, ID_PICK_PROFILESB2L, ID_PICK_PROFILES
 // using wxID_ANY for lower for some reason(why?), idbl - button lower line ~493
 
 LisaConfigFrame::LisaConfigFrame(const wxString& title, LisaConfig *lisaconfig)
-       : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(550*HIDPISCALE,545*HIDPISCALE),
+    : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(480*HIDPISCALE,460*HIDPISCALE),
                  wxDEFAULT_FRAME_STYLE|wxCLIP_CHILDREN |//|wxNO_FULL_REPAINT_ON_RESIZE)
                  wxMINIMIZE_BOX|wxMAXIMIZE_BOX|wxRESIZE_BORDER|wxSYSTEM_MENU|wxCAPTION|
                  wxTAB_TRAVERSAL|wxCLOSE_BOX|wxNO_FULL_REPAINT_ON_RESIZE)
@@ -173,9 +208,11 @@ LisaConfigFrame::LisaConfigFrame(const wxString& title, LisaConfig *lisaconfig)
   slotcard[0]=_T("Dual Parallel");
   slotcard[1]=_T("Nothing");
 
-  // Reduced height from 650 to 560 to fit on screens with notch/menu bar
+    SetSizeHints((int)(420*HIDPISCALE), (int)(380*HIDPISCALE));
+
+    // Reduced height from 650 to 560 to fit on screens with notch/menu bar
   thenoteBook =
-            new wxNotebook(this, ID_NOTEBOOK,  wxDefaultPosition, wxSize(550*HIDPISCALE, 495*HIDPISCALE) );
+                        new wxNotebook(this, ID_NOTEBOOK,  wxDefaultPosition, wxSize(480*HIDPISCALE, 410*HIDPISCALE) );
   CreateNotebook(thenoteBook);
 
   (void)new wxStaticText(this, ID_PREFS_HINT, _T("Apply saves all tabs. Turn Lisa off before changing ProFile paths."),
@@ -498,9 +535,7 @@ void  LisaConfigFrame::OnApply(wxCommandEvent& WXUNUSED(event))
  if (!m_text_propathh[3])  return;
  if (!m_text_propathl[3])  return;
 
- wxString rompath = m_rompath->GetValue();
- rompath.Trim();
- rompath.Trim(false);
+ wxString rompath = normalize_user_path(m_rompath->GetValue());
  if (rompath.IsEmpty())
  {
    thenoteBook->SetSelection(0);
@@ -517,6 +552,9 @@ void  LisaConfigFrame::OnApply(wxCommandEvent& WXUNUSED(event))
                 _T("Invalid ROM path"), wxICON_INFORMATION | wxOK);
    return;
  }
+
+ wxString dualrompath = normalize_user_path(m_dprompath->GetValue());
+ wxString profile_path = normalize_user_path(m_propath->GetValue());
 
  if (pportbox->GetSelection()==0)
  {
@@ -567,8 +605,8 @@ void  LisaConfigFrame::OnApply(wxCommandEvent& WXUNUSED(event))
  }
 
  my_lisaconfig->myserial= serialtxt->GetValue();
- my_lisaconfig->rompath = m_rompath->GetValue();
- my_lisaconfig->dualrom =m_dprompath->GetValue();
+ my_lisaconfig->rompath = rompath;
+ my_lisaconfig->dualrom = dualrompath;
 
  my_lisaconfig->serial1xon=serialaxon->GetValue() ? "1":"0";
  my_lisaconfig->serial2xon=serialbxon->GetValue() ? "1":"0";
@@ -622,7 +660,7 @@ consoletermwindow = console_term->GetValue() ? 1:0;
  */
 
  my_lisaconfig->parallel=pportopts[pportbox->GetSelection()];
- my_lisaconfig->parallelp=m_propath->GetValue();
+ my_lisaconfig->parallelp=profile_path;
 
  //fprintf(stderr,"parallel port   :%s\n",my_lisaconfig->parallel.c_str());
  //fprintf(stderr,"parameter       :%s\n\n",my_lisaconfig->parallelp.c_str());
@@ -643,12 +681,12 @@ consoletermwindow = console_term->GetValue() ? 1:0;
     my_lisaconfig->s3h=pportopts[pportboxh[3]->GetSelection()];
     my_lisaconfig->s3l=pportopts[pportboxl[3]->GetSelection()];
 
-    my_lisaconfig->s1hp=m_text_propathh[1]->GetValue();
-    my_lisaconfig->s1lp=m_text_propathl[1]->GetValue();
-    my_lisaconfig->s2hp=m_text_propathh[2]->GetValue();
-    my_lisaconfig->s2lp=m_text_propathl[2]->GetValue();
-    my_lisaconfig->s3hp=m_text_propathh[3]->GetValue();
-    my_lisaconfig->s3lp=m_text_propathl[3]->GetValue();
+    my_lisaconfig->s1hp=normalize_user_path(m_text_propathh[1]->GetValue());
+    my_lisaconfig->s1lp=normalize_user_path(m_text_propathl[1]->GetValue());
+    my_lisaconfig->s2hp=normalize_user_path(m_text_propathh[2]->GetValue());
+    my_lisaconfig->s2lp=normalize_user_path(m_text_propathl[2]->GetValue());
+    my_lisaconfig->s3hp=normalize_user_path(m_text_propathh[3]->GetValue());
+    my_lisaconfig->s3lp=normalize_user_path(m_text_propathl[3]->GetValue());
 
  // --- imagewriter settings ---------------------------------------------
    my_lisaconfig->iw_dipsw_1=(dipsw1_123->GetSelection() ) |
@@ -657,7 +695,7 @@ consoletermwindow = console_term->GetValue() ? 1:0;
                              (dipsw1_67->GetSelection()<<5)|
                              (dipsw1_8->GetValue() ? 128:0 );
    my_lisaconfig->iw_png_on =iw_img_box->GetValue();
-   my_lisaconfig->iw_png_path =iw_img_path->GetValue();
+    my_lisaconfig->iw_png_path =normalize_user_path(iw_img_path->GetValue());
 
 
    save_configs();
@@ -1038,8 +1076,9 @@ void LisaConfigFrame::OnPickDRom(wxCommandEvent& WXUNUSED(event))
 
 void LisaConfigFrame::OnPickProFile(wxCommandEvent& WXUNUSED(event))
 {
+wxString default_dir = get_default_profile_disks_dir();
 wxFileDialog open(this,                         wxT("Open ProFile drive image:"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,  // No default filename when opening
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 (long int)wxFD_OPEN|wxFD_FILE_MUST_EXIST,wxDefaultPosition);
@@ -1051,8 +1090,9 @@ wxFileDialog open(this,                         wxT("Open ProFile drive image:")
 
 void LisaConfigFrame::OnPickProFile1H(wxCommandEvent& WXUNUSED(event))
 {
+ wxString default_dir = get_default_profile_disks_dir();
  wxFileDialog open(NULL, wxT("Open ProFile drive image for upper port of Slot 1:"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,  // No default filename when opening
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 wxFD_OPEN|wxFD_FILE_MUST_EXIST);
@@ -1061,8 +1101,9 @@ void LisaConfigFrame::OnPickProFile1H(wxCommandEvent& WXUNUSED(event))
 
 void LisaConfigFrame::OnPickProFile1L(wxCommandEvent& WXUNUSED(event))
 {
+ wxString default_dir = get_default_profile_disks_dir();
  wxFileDialog open(NULL,  wxT("Open ProFile drive image for lower port of Slot 1:"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,  // No default filename when opening
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 wxFD_OPEN|wxFD_FILE_MUST_EXIST);
@@ -1074,8 +1115,9 @@ void LisaConfigFrame::OnPickProFile1L(wxCommandEvent& WXUNUSED(event))
 
 void LisaConfigFrame::OnPickProFile2H(wxCommandEvent& WXUNUSED(event))
 {
+ wxString default_dir = get_default_profile_disks_dir();
  wxFileDialog open(NULL,  wxT("Open ProFile drive image for upper port of Slot 2:"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,  // No default filename when opening
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 wxFD_OPEN|wxFD_FILE_MUST_EXIST);
@@ -1086,8 +1128,9 @@ void LisaConfigFrame::OnPickProFile2H(wxCommandEvent& WXUNUSED(event))
 
 void LisaConfigFrame::OnPickProFile2L(wxCommandEvent& WXUNUSED(event))
 {
+ wxString default_dir = get_default_profile_disks_dir();
  wxFileDialog open(NULL,  wxT("Open ProFile drive image for lower port of Slot 2:"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,  // No default filename when opening
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 wxFD_OPEN|wxFD_FILE_MUST_EXIST);
@@ -1100,8 +1143,9 @@ void LisaConfigFrame::OnPickProFile2L(wxCommandEvent& WXUNUSED(event))
 // slot 3
 void LisaConfigFrame::OnPickProFile3H(wxCommandEvent& WXUNUSED(event))
 {
+ wxString default_dir = get_default_profile_disks_dir();
  wxFileDialog open(NULL, wxT("Open ProFile drive image for upper port of Slot 3:"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,  // No default filename when opening
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 wxFD_OPEN|wxFD_FILE_MUST_EXIST);
@@ -1112,8 +1156,9 @@ void LisaConfigFrame::OnPickProFile3H(wxCommandEvent& WXUNUSED(event))
 
 void LisaConfigFrame::OnPickProFile3L(wxCommandEvent& WXUNUSED(event))
 {
+ wxString default_dir = get_default_profile_disks_dir();
  wxFileDialog open(NULL, wxT("Open ProFile drive image for lower port of Slot 3:"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,  // No default filename when opening
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 wxFD_OPEN|wxFD_FILE_MUST_EXIST);

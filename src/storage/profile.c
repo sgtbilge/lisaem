@@ -658,11 +658,14 @@ char *profile_event_names[5]=
 
 // implement a timeout that resets the state machine back to state 0, and various delays.
 
+#define STORAGE_DELAY_CYCLES(x) ((XTIMER)((float)(x) / (via_throttle_factor <= 1.0f ? 1.0f : via_throttle_factor)))
+#define STORAGE_DELAY_MIN1(x)   ((STORAGE_DELAY_CYCLES(x) < 1) ? 1 : STORAGE_DELAY_CYCLES(x))
+
                                         // alarm_len_e gets set to x 1st to avoid using (x) twice - avoids macro side effects
-#define SET_PROFILE_LOOP_TIMEOUT(x)     {P->alarm_len_e=(x); P->clock_e=cpu68k_clocks + P->alarm_len_e;}
+#define SET_PROFILE_LOOP_TIMEOUT(x)     {P->alarm_len_e=STORAGE_DELAY_MIN1(x); P->clock_e=cpu68k_clocks + P->alarm_len_e;}
 
 // same as above, but disable pre-entry delay
-#define SET_PROFILE_LOOP_NO_PREDELAY(x) {P->alarm_len_e=0;   P->clock_e=cpu68k_clocks + (x);           }
+#define SET_PROFILE_LOOP_NO_PREDELAY(x) {P->alarm_len_e=0;   P->clock_e=cpu68k_clocks + STORAGE_DELAY_MIN1(x);           }
 
 #define CHECK_PROFILE_LOOP_TIMEOUT      {if (P->clock_e<=cpu68k_clocks)                                      \
                                             {                                                                \

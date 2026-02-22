@@ -621,7 +621,10 @@ void FloppyIRQ_time_up(void)
 void FloppyIRQ(uint8 RWTS)
 {
 
-      fdir_timer=cpu68k_clocks+(RWTS==2 ? (HALF_OF_A_SECOND):(HUN_THOUSANDTH_OF_A_SEC));  //THOUSANDTH_OF_A_SECOND;
+    XTIMER fdir_delay=(RWTS==2 ? (HALF_OF_A_SECOND):(HUN_THOUSANDTH_OF_A_SEC));  //THOUSANDTH_OF_A_SECOND;
+    XTIMER scaled_delay=(XTIMER)((float)fdir_delay / (via_throttle_factor <= 1.0f ? 1.0f : via_throttle_factor));
+    if (scaled_delay<1) scaled_delay=1;
+    fdir_timer=cpu68k_clocks+scaled_delay;
       cpu68k_clocks_stop=MIN(fdir_timer+1,cpu68k_clocks_stop); //2021.06.11
       my_rwts=RWTS;
 

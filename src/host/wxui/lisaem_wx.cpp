@@ -1842,6 +1842,7 @@ LisaWin::LisaWin(wxWindow *parent)
 
     ALERT_LOG(0,"========================================================================");
     SetExtraStyle(wxWS_EX_PROCESS_IDLE );
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
 
     int screensizex,screensizey;   // my_lisaframe is still null.
     ALERT_LOG(0,"========================================================================");
@@ -2587,6 +2588,7 @@ void save_global_prefs(void)
     myConfig->Flush(); //valgrind==24726== Conditional jump or move depends on uninitialised value(s)
 
     update_menu_checkmarks();
+
 }
 
 
@@ -2624,8 +2626,8 @@ bool LisaEmApp::OnInit()
     if (!wxApp::OnInit()) return false;      // call default behaviour (mandatory)
 
     wxStandardPathsBase& stdp = wxStandardPaths::Get();
-    wxString defaultconfig=stdp.GetUserConfigDir();
-    wxString osslash  = wxFileName::GetPathSeparator(wxPATH_NATIVE);
+  wxString userconfigdir=stdp.GetUserConfigDir();
+  wxString defaultconfig=wxFileName(userconfigdir,_T("lisaem.conf")).GetFullPath();
 
     hidpi_scale=0.5; // prevent divide by zero issues
 
@@ -2634,15 +2636,35 @@ bool LisaEmApp::OnInit()
       buglog=fopen("lisaem-output.txt","a+");
     #endif
 
-    // this crashes on macOSX>10.9 (maybe earlier too, crashes on the call, before it even returns)
-    //wxString defaultconfig = stdp.wxGetHomeDir();
-    defaultconfig  << osslash << "/lisaem.conf";
-
     myConfig = wxConfig::Get();         // this one is the global configuration for the app.
                                         // get the path to the last opened Lisaconfig and load that.
     myconfigfile=myConfig->Read(_T("/lisaconfigfile"),defaultconfig);
 
     if (on_start_lisaconfig!="") {myconfigfile=on_start_lisaconfig; on_start_lisaconfig="";}
+
+    myconfigfile.Trim();
+    myconfigfile.Trim(false);
+    myconfigfile=wxExpandEnvVars(myconfigfile);
+    if (myconfigfile==_T("~")) myconfigfile=wxGetHomeDir();
+    if (myconfigfile.StartsWith(_T("~/"))) myconfigfile=wxGetHomeDir()+myconfigfile.Mid(1);
+
+    if (myconfigfile.IsEmpty()) myconfigfile=defaultconfig;
+
+    if (wxFileName::DirExists(myconfigfile))
+    {
+      myconfigfile=wxFileName(myconfigfile,_T("lisaem.conf")).GetFullPath();
+    }
+    else
+    {
+      wxFileName cfgpath(myconfigfile);
+      if (!cfgpath.IsAbsolute())
+      {
+        myconfigfile=wxFileName(userconfigdir,myconfigfile).GetFullPath();
+      }
+    }
+
+    // Keep the remembered path absolute so we never resolve relative to CWD.
+    myConfig->Write(_T("/lisaconfigfile"),myconfigfile);
 
     ALERT_LOG(0,"Reading this Lisa config...");
 
@@ -2815,6 +2837,32 @@ bool LisaEmApp::OnInit()
     wxYield();
     my_lisaframe->Raise();
     #endif
+
+    // Force first paint after the event loop starts; some macOS setups can
+    // defer initial draw work until the first user input event.
+    auto queue_initial_paint = [this]()
+    {
+      if (!my_lisaframe || !my_lisawin) return;
+
+      my_lisawin->dirtyscreen = 2;
+      my_lisawin->repaintall |= REPAINT_INVALID_WINDOW | REPAINT_VIDEO_TO_SKIN;
+      videoramdirty = 32768;
+
+      my_lisawin->Refresh(false, NULL);
+      my_lisaframe->Refresh(false, NULL);
+      my_lisaframe->Update();
+      my_lisawin->Update();
+    };
+
+    CallAfter([this, queue_initial_paint]()
+    {
+      if (!my_lisaframe || !my_lisawin) return;
+
+      my_lisaframe->Layout();
+      my_lisaframe->SendSizeEvent();
+      queue_initial_paint();
+      my_lisaframe->CallAfter(queue_initial_paint);
+    });
 
     ALERT_LOG(0,"OnInit Done.")
     return true;
@@ -5469,9 +5517,11 @@ void LisaEmFrame::OnConfig(wxCommandEvent& WXUNUSED(event))
 void LisaEmFrame::OnOpen(wxCommandEvent& WXUNUSED(event))
 {
       wxString openfile;
+  wxStandardPathsBase& stdp = wxStandardPaths::Get();
+  wxString prefs_dir = stdp.GetUserConfigDir();
 
       wxFileDialog open(this,         wxT("Open LisaEm Preferences:"),
-                                      wxEmptyString,
+              prefs_dir,
                                       wxEmptyString,
                                       wxT("LisaEm Preferences (*.lisaem)|*.lisaem|All (*.*)|*.*"),
                                       (long int)wxFD_OPEN,wxDefaultPosition);
@@ -5502,10 +5552,13 @@ void LisaEmFrame::OnOpen(wxCommandEvent& WXUNUSED(event))
 void LisaEmFrame::OnSaveAs(wxCommandEvent& WXUNUSED(event))
 {
       wxString savefile;
+  wxStandardPathsBase& stdp = wxStandardPaths::Get();
+  wxString prefs_dir = stdp.GetUserConfigDir();
 
       wxFileName prefs=wxFileName(myconfigfile);
       wxString justTheFilename=prefs.GetFullName();
       wxString justTheDir=prefs.GetPath(wxPATH_GET_VOLUME|wxPATH_GET_SEPARATOR,wxPATH_NATIVE);
+  if (justTheDir.IsEmpty()) justTheDir = prefs_dir;
 
       wxFileDialog open(this,          wxT("Save LisaEm Preferences As:"),
                                        justTheDir,  // path
@@ -5629,6 +5682,10 @@ void LisaEmFrame::reset_throttle_clock(void)
    last_runtime_sample=0;
    lastcrtrefresh=0;
    runtime.Start(0);
+
+  via_throttle_factor=(float)(throttle/5.0);
+  if (via_throttle_factor<1.0f) via_throttle_factor=1.0f;
+
    if    (throttle  ==10000000)
           clockfactor=0;
    else   clockfactor=1.0/(throttle*1000.0);
@@ -6391,6 +6448,17 @@ void LisaEmFrame::OnProFilePwrOffAll(wxCommandEvent& WXUNUSED(event))
   profile_power=0; UpdateProfileMenu(); 
 }
 
+static wxString get_default_profile_disks_dir()
+{
+  wxStandardPathsBase& stdp = wxStandardPaths::Get();
+  wxString sep = wxFileName::GetPathSeparator(wxPATH_NATIVE);
+  wxString dir = stdp.GetUserDataDir() + sep + _T("PROFILE_DISKS");
+
+  if (!wxFileName::DirExists(dir)) wxFileName::Mkdir(dir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL);
+
+  return dir;
+}
+
 
 void LisaEmFrame::OnNewProFile(wxCommandEvent& WXUNUSED(event))     
 {
@@ -6400,8 +6468,9 @@ void LisaEmFrame::OnNewProFile(wxCommandEvent& WXUNUSED(event))
      //              5M   10M   16M   20M   32M   40M    64M
 
     char cfilename[MAXPATHLEN];
+    wxString default_dir = get_default_profile_disks_dir();
     wxFileDialog open(this, wxT( "Create blank ProFile drive as:"),
-                                  wxEmptyString,
+                    default_dir,
                                   wxT("lisaem-profile.dc42"),
                                   wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                   (long int)wxFD_SAVE,wxDefaultPosition);
@@ -6480,6 +6549,17 @@ void LisaEmFrame::insert_floppy_anim(wxString openfile)
         }
 }
 
+static wxString get_default_floppy_disks_dir()
+{
+  wxStandardPathsBase& stdp = wxStandardPaths::Get();
+  wxString sep = wxFileName::GetPathSeparator(wxPATH_NATIVE);
+  wxString dir = stdp.GetUserDataDir() + sep + _T("FLOPPY_DISKS");
+
+  if (!wxFileName::DirExists(dir)) wxFileName::Mkdir(dir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL);
+
+  return dir;
+}
+
 
 void LisaEmFrame::OnxFLOPPY(void)
 {
@@ -6493,8 +6573,9 @@ void LisaEmFrame::OnxFLOPPY(void)
     pause_run();
 
     wxString openfile;
+    wxString default_dir = get_default_floppy_disks_dir();
     wxFileDialog open(this,                     wxT("Insert a Lisa diskette"),
-                                                wxEmptyString,
+                          default_dir,
                                                 wxEmptyString,
 //                                                wxT("Disk Copy (*.dc42)|*.dc42|DART (*.dart)|*.dart|Image (*.image)|*.image|All (*.*)|*.*"),
 //                                              "BMP and GIF files (*.bmp;*.gif)|*.bmp;*.gif|PNG files (*.png)|*.png"
@@ -6527,8 +6608,9 @@ void LisaEmFrame::OnxNewFLOPPY(void)
     pause_run();
 
     wxString openfile;
+    wxString default_dir = get_default_floppy_disks_dir();
     wxFileDialog open(this,                     wxT("Create and insert a blank microdiskette image"),
-                                                wxEmptyString,
+                          default_dir,
                                                 wxT("blank.dc42"),
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 (long int)wxFD_SAVE,wxDefaultPosition);
@@ -8113,10 +8195,11 @@ extern "C" int pickprofilesize(char *filename, int allowexisting)
   // User selecting existing image ///////////////////////////////////////////////////////////////////////////////////////////////
   if (r==-1 && allowexisting) {
     int check=1;
+    wxString default_dir = get_default_profile_disks_dir();
     while (check) {
         wxString openfile;
         wxFileDialog open(my_lisaframe,         wxT("Select an ProFile hard drive image"),
-                                                wxEmptyString,
+                                                default_dir,
                                                 wxEmptyString,
                                                 wxT("Disk Copy (*.dc42)|*.dc42|All (*.*)|*.*"),
                                                 (long int)wxFD_OPEN,wxDefaultPosition);
