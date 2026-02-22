@@ -177,6 +177,7 @@ int LisaEmCore::Initialize(const LisaEmConfig& config) {
 }
 
 int LisaEmCore::EmulateLoop(uint32_t now) {
+    (void)now;
     if (!m_running || m_paused) return 0;
     // Execution slice logic to be moved here
     return 0;

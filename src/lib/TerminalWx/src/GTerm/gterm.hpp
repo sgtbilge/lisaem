@@ -328,20 +328,20 @@ public:
 		int x, int y, unsigned char c) = 0;
 
 	// optional child-supplied functions
-	virtual void MoveChars(int sx, int sy, int dx, int dy, int w, int h) { }
-	virtual void ClearChars(int bg_color, int x, int y, int w, int h) { }
-        virtual void SendBack(int len, char *data) { }
+	virtual void MoveChars(int, int, int, int, int, int) { }
+	virtual void ClearChars(int, int, int, int, int) { }
+        virtual void SendBack(int, char *) { }
 	virtual void SendBack(char *data) { SendBack(strlen(data), data); }
-	virtual void ModeChange(int state) { }
+	virtual void ModeChange(int) { }
 	virtual void Bell() { }
-	virtual void RequestSizeChange(int w, int h) { }
+	virtual void RequestSizeChange(int, int) { }
 
         virtual int TranslateKeyCode(int keycode, int *len, char *data,
                                      int shift = 0, int ctrl = 0, int alt = 0);
 
 #ifdef GTERM_PC
-        virtual void SelectPrinter(char *PrinterName) {}
-        virtual void PrintChars(int len, unsigned char *data) {}
+        virtual void SelectPrinter(char *) {}
+        virtual void PrintChars(int, unsigned char *) {}
 
         void SetMachineName(char *machinename);
         char *GetMachineName(void) { return pc_machinename; }
