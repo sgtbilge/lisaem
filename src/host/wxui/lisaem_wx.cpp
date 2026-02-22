@@ -39,10 +39,8 @@
 #define EXTERMINATE(x) {if (x) {delete x; x=NULL;}}
 
 
-// which hqx35 are we using? enable for 3x-3x - change build.sh to use hq3x-3x.cpp when enabled
-// HQX display mode has been disabled - use AAGray instead
-// #define USE_HQX35 1
-#undef USE_HQX35
+// which hqx35 are we using? enable for 3x-3x - change build.sh to use hq3x.cpp when enabled
+#define USE_HQX35 1
 #ifdef USE_HQX35
 #define HQX35X (720*2)
 #define HQX35Y (364*3)
@@ -173,7 +171,7 @@ long emulation_time=25;
 #endif
 
 #include <wx/rawbmp.h>
-// #include <hqx.h>  // HQX display mode disabled
+#include <hqx.h>
 
 #include <machine.h>
 #include <keyscan.h>
@@ -474,7 +472,7 @@ enum
      vidmod_raw=2,   // RePaint_SingleY
      vidmod_3y=3,    // RePaint_2X3Y
      vidmod_aag=4,   // RePaint_AAGray
-     // vidmod_hq35x=5, // RePaint_HQ35X - DISABLED
+     vidmod_hq35x=5, // RePaint_HQ35X
      vidmod_3a=0x3a  // RePaint_3A;  // consider adding 2x 3x or 4x HQX for this
 };
 
@@ -519,7 +517,7 @@ public:
       void Skins_Repaint_Floppy(wxRect &rect, DCTYPE &dc);
       void Skins_Repaint_PowerPlane(wxRect &rect, DCTYPE &dc);
 
-      // int RePaint_HQ35X(int startx, int starty, int width, int height);  // DISABLED
+      int RePaint_HQ35X(int startx, int starty, int width, int height);
       int RePaint_AAGray(int startx, int starty, int width, int height);
       int RePaint_AntiAliased(int startx, int starty, int width, int height);
 
@@ -709,7 +707,7 @@ BEGIN_EVENT_TABLE(LisaEmFrame, wxFrame)
 
     EVT_MENU(ID_VID_AA,          LisaEmFrame::OnVideoAntiAliased)
     EVT_MENU(ID_VID_AAG,         LisaEmFrame::OnVideoAAGray)
-    // EVT_MENU(ID_VID_HQ35X,       LisaEmFrame::OnVideoHQ35X)  // HQX disabled
+    EVT_MENU(ID_VID_HQ35X,       LisaEmFrame::OnVideoHQ35X)
 
     EVT_MENU(ID_VID_DY,          LisaEmFrame::OnVideoDoubleY)
     EVT_MENU(ID_VID_SY,          LisaEmFrame::OnVideoSingleY)
@@ -1199,12 +1197,11 @@ void LisaWin::SetVideoMode(int mode)
 
   switch (mode)
   {
-   // HQX display mode removed - use AAGray instead
-   // case vidmod_hq35x: buildscreenymap();      skin.screen_origin_x=0; skin.screen_origin_y=0;  
-   //                                            effective_lisa_vid_size_x=  _H(720);         effective_lisa_vid_size_y=  _H(500);
-   //                                            o_effective_lisa_vid_size_x=   720;          o_effective_lisa_vid_size_y=   500;
-   //                                            RePainter=&LisaWin::RePaint_HQ35X;
-   //                                            break;
+   case vidmod_hq35x: buildscreenymap();      skin.screen_origin_x=0; skin.screen_origin_y=0;
+                                              effective_lisa_vid_size_x=  _H(720);         effective_lisa_vid_size_y=  _H(500);
+                                              o_effective_lisa_vid_size_x=   720;          o_effective_lisa_vid_size_y=   500;
+                                              RePainter=&LisaWin::RePaint_HQ35X;
+                                              break;
 
    case vidmod_aag:   buildscreenymap();      skin.screen_origin_x=0; skin.screen_origin_y=0;  
                                               effective_lisa_vid_size_x=  _H(720);         effective_lisa_vid_size_y=  _H(500);
@@ -1351,7 +1348,7 @@ set_dirty;
 extern "C" void close_all_terminals(void);
 
 // if we close the LisaEm window and another window such as preferences or a terminal is open, we get segfault
-void LisaEmFrame::OnClose(wxCloseEvent& event)
+void LisaEmFrame::OnClose(wxCloseEvent& WXUNUSED(event))
 {
     wxCommandEvent foo;
     OnQuit(foo);
@@ -1499,7 +1496,7 @@ extern "C"  void dumpallscreenshot(void)
 
 #endif
 
-void LisaEmFrame::Update_Status(long elapsed,long idleentry)
+void LisaEmFrame::Update_Status(long elapsed,long WXUNUSED(idleentry))
 {
     static int counter;
     wxString text;
@@ -1541,7 +1538,6 @@ void LisaEmFrame::Update_Status(long elapsed,long idleentry)
     my_lisawin->mousemoved=0;
     screen_paint_update=0;                              // reset statistics counters
     onidle_calls=0;
-    idleentry--;                                        // eat warning when debug version isn't used.
 
     // if we're in the ROM, and within the first 3 seconds of emulation, and have had command line options, 
     // send Apple-2 or Apple 3 to start from floppy/Widget/Profile
@@ -2037,8 +2033,6 @@ void LisaEmFrame::OnVideoAntiAliased(wxCommandEvent& WXUNUSED(event))
     my_lisawin->SetVideoMode(vidmod_aa);
 }
 
-// HQX VIDEO MODE DISABLED - Function commented out
-/*
 void LisaEmFrame::OnVideoHQ35X(wxCommandEvent& WXUNUSED(event))
 {
     if (screensizex<IWINSIZEX || screensizey<IWINSIZEY)
@@ -2051,9 +2045,8 @@ void LisaEmFrame::OnVideoHQ35X(wxCommandEvent& WXUNUSED(event))
 
         if (screensizey<IWINSIZEY) {my_lisawin->SetVideoMode(vidmod_raw); return;}  // even still too small, go raw bits mode.
     }
-    my_lisawin->SetVideoMode(vidmod_aag);  // Use AAGray instead of HQX
+    my_lisawin->SetVideoMode(vidmod_hq35x);
 }
-*/
 
 void LisaEmFrame::OnVideoAAGray(wxCommandEvent& WXUNUSED(event))
 {
@@ -3677,8 +3670,6 @@ static inline void getgraymap(uint16 up, uint16 val, uint16 dn,  uint8 *retval)
   retval[14]=retval[15]=graymap[(((BIT1 +BIT0 ) & up)<< 4 )|(((BIT1 +BIT0 ) & val)<< 2 ) | (((BIT1 +BIT0 ) & dn)     )]; 
 }
 
-// FUNCTION DISABLED: RePaint_HQ35X - HQX display mode removed, use AAGray instead
-/*
 int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
 {
     uint32 brightness;
@@ -3687,7 +3678,7 @@ int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
     brightness=bright[7]; // contrast ff=black, 80=visible, 00=all white.
     if (brightness==0) brightness=0xe0;
 
-    if (!my_lisahq3xbitmap || !my_memhq3xDC || ( my_lisahq3xbitmap->GetWidth()<HQX35X+4 || my_lisahq3xbitmap->GetHeight()<HQX35X+4) ) {
+    if (!my_lisahq3xbitmap || !my_memhq3xDC || ( my_lisahq3xbitmap->GetWidth()<HQX35X+4 || my_lisahq3xbitmap->GetHeight()<HQX35Y+4) ) {
 
           delete my_lisahq3xbitmap;
           delete my_memhq3xDC;
@@ -3700,13 +3691,12 @@ int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
           my_memhq3xDC->SetMapMode(wxMM_TEXT);
     }
 
-    //if (!skins_on) ALERT_LOG(0,"startx,y:%d,%d size:%d,%d",startx,starty,width,height);
-    if (starty+height>=364*3 || startx+width>=720*2) {
-        //ALERT_LOG(0,"!!! got oversized update, reset to proper coordinates !!!");
-        startx=0; starty=0; width=720*2; height=364*3; fullrefresh=1;
-    }
-
-    hq3x_32_rb( startx, starty, width, height, 90, my_lisahq3xbitmap, HQX35X,HQX35Y,brightness );
+    // Always render the full HQX bitmap. The paint event rect arrives in window/display
+    // coordinates (720x500 space), but hq3x_32_rb expects HQX bitmap coordinates
+    // (HQX35X x HQX35Y = 1440x1092). Passing window coords would cause hq3x_32_rb to
+    // divide them by 2 and 3, yielding only a fraction of the source image.
+    hq3x_32_rb( 0, 0, HQX35X, HQX35Y, 90, my_lisahq3xbitmap, HQX35X,HQX35Y,brightness );
+    fullrefresh=1;
 
     // v- not needed for macos X 10.12
     #ifdef __WXGTK__
@@ -3721,7 +3711,6 @@ int LisaWin::RePaint_HQ35X(int startx, int starty, int width, int height)
 
   return fullrefresh;
 }
-*/  // END OF DISABLED RePaint_HQ35X FUNCTION
 
 
 int LisaWin::RePaint_AAGray(int startx, int starty, int endx, int endy)
@@ -4555,8 +4544,7 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
       dc.DrawRectangle(0 ,0,   65535,65535);  
   }
 
-  // HQX mode disabled
-  if  (false) {  // (lisa_ui_video_mode==vidmod_hq35x)
+  if  (lisa_ui_video_mode==vidmod_hq35x) {
       if (!my_lisahq3xbitmap) {
           delete my_lisahq3xbitmap;
           delete my_memhq3xDC;
@@ -4665,9 +4653,15 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
       #endif
 
       switch (lisa_ui_video_mode) {
-          // case  vidmod_hq35x:  // HQX mode disabled
-          case 999:  // placeholder - HQX disabled
-                // No-op - HQX rendering path removed
+          case  vidmod_hq35x:
+                if (my_memhq3xDC) {
+                dc.StretchBlit( (ox+_H(e_dirty_x_min)),                                        (oy+_H(e_dirty_y_min)),                       // target x,y on window
+                                (_H(e_dirty_x_max-e_dirty_x_min)),                             (_H(e_dirty_y_max-e_dirty_y_min)),            // width, height
+                                my_memhq3xDC,                                                                                                 // src dc
+                                e_dirty_x_min*2,                                               e_dirty_y_min*HQX35Y/500,                     // src x,y (2x wide, map 0..500 -> 0..HQX35Y)
+                                (e_dirty_x_max-e_dirty_x_min)*2,                               (e_dirty_y_max-e_dirty_y_min)*HQX35Y/500,     // src w,h
+                                wxCOPY, false);
+                }
                 break;
           case  vidmod_3y:
                 dc.StretchBlit( (ox+_H(e_dirty_x_min*2)),                     (oy+_H(e_dirty_y_min)),                      // target x,y on window
@@ -6076,14 +6070,14 @@ void update_menu_checkmarks(void)
       {
         DisplayMenu->Enable(ID_VID_AA,   lisa_ui_video_mode != 0x3a);
         DisplayMenu->Enable(ID_VID_AAG,  lisa_ui_video_mode != 0x3a);
-        // DisplayMenu->Enable(ID_VID_HQ35X,lisa_ui_video_mode != 0x3a);  // HQX disabled
+        DisplayMenu->Enable(ID_VID_HQ35X,lisa_ui_video_mode != 0x3a);
         DisplayMenu->Enable(ID_VID_DY,   lisa_ui_video_mode != 0x3a);
         DisplayMenu->Enable(ID_VID_SY,   lisa_ui_video_mode != 0x3a);
         DisplayMenu->Enable(ID_VID_2X3Y, lisa_ui_video_mode != 0x3a);
 
         DisplayMenu->Check(ID_VID_AA,    (lisa_ui_video_mode == vidmod_aa)  );
         DisplayMenu->Check(ID_VID_AAG,   (lisa_ui_video_mode == vidmod_aag) );
-        // DisplayMenu->Check(ID_VID_HQ35X, (lisa_ui_video_mode == vidmod_hq35x) );  // HQX disabled
+        DisplayMenu->Check(ID_VID_HQ35X, (lisa_ui_video_mode == vidmod_hq35x) );
 
         DisplayMenu->Check(ID_VID_DY,    (lisa_ui_video_mode == vidmod_2y)  );
         DisplayMenu->Check(ID_VID_SY,    (lisa_ui_video_mode == vidmod_raw) );
@@ -6760,7 +6754,7 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     DisplayScaleSub->Append(ID_VID_SCALE_ZOOMIN,         wxT("Zoom In \tCtrl-+"),   wxT("Zoom In") );
     DisplayScaleSub->Append(ID_VID_SCALE_ZOOMOUT,        wxT("Zoom Out \tCtrl--"),  wxT("Zoom Out") );
 
-    // DisplayMenu->AppendRadioItem(ID_VID_HQ35X ,       wxT("HQX Upscaler")          ,  wxT("Aspect Corrected High Quality Magnification Filer hq3.5x") );  // HQX disabled
+    DisplayMenu->AppendRadioItem(ID_VID_HQ35X ,       wxT("HQX Upscaler")          ,  wxT("Aspect Corrected High Quality Magnification Filer hq3.5x") );
     DisplayMenu->AppendRadioItem(ID_VID_AA  ,         wxT("AntiAliased")           ,  wxT("Aspect Corrected with Anti Aliasing") );
     DisplayMenu->AppendRadioItem(ID_VID_AAG ,         wxT("AntiAliased with Gray Replacement"),  wxT("Aspect Corrected with Anti Aliasing and Gray Replacing") );
     DisplayMenu->AppendRadioItem(ID_VID_SY  ,         wxT("Raw")                   ,  wxT("Uncorrected Aspect Ratio") );

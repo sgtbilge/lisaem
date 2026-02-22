@@ -536,7 +536,7 @@ export  PHASE2LIST="\
         src/host/wxui/LisaConfig:src/host/wxui/include/LisaConfig.h \
         src/host/wxui/LisaConfigFrame:src/host/wxui/include/LisaConfigFrame.h \
         src/host/wxui/LisaSkin:src/host/wxui/include/LisaSkin.h \
-        src/lisa/crt/hqx/hq3x-3x:src/lisa/crt/hqx/include/common.h:src/lisa/crt/hqx/include/hqx.h \
+        src/lisa/crt/hqx/hq3x:src/lisa/crt/hqx/include/common.h:src/lisa/crt/hqx/include/hqx.h \
         src/printer/imagewriter/imagewriter-wx:./src/printer/imagewriter/include/imagewriter-wx.h \
         src/host/wxui/z8530-terminal"
 # change ^- hq3x vs hq3x-3x here as needed as well as the #define
