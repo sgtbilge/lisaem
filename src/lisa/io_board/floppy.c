@@ -1780,13 +1780,27 @@ int floppy_insert(char *Image)     // emulator should call this when user decide
        }
 
     err=dc42_check_checksums(F);    // 0 if they match, 1 if tags, 2 if data, 3 if both don't match
-    switch (err)
+    if (err)
     {
-      case 1 : messagebox("The Tag checksum failed for this disk.  It may be corrupted.","Danger!"); break;
-      case 2 : messagebox("The Data checksum failed for this disk.  It may be corrupted.","Danger!"); break;
-      case 3 : messagebox("Both the Data and Tag checksums failed for this disk!","Danger!"); break;
-      default:
-      case 0 : ;
+      int fixerr=dc42_recalc_checksums(F);
+      if (!fixerr) fixerr=dc42_sync_to_disk(F);
+      err=dc42_check_checksums(F);
+      if (err)
+      {
+        ALERT_LOG(0,"Unable to auto-repair floppy checksums for %s (check:%d fix:%d)",Image,err,fixerr);
+        switch (err)
+        {
+          case 1 : messagebox("Failed to auto-repair Tag checksum for this disk.","Danger!"); break;
+          case 2 : messagebox("Failed to auto-repair Data checksum for this disk.","Danger!"); break;
+          case 3 : messagebox("Failed to auto-repair Data and Tag checksums for this disk!","Danger!"); break;
+          default: ;
+        }
+      }
+      else
+      {
+        ALERT_LOG(0,"Auto-repaired floppy checksums for %s",Image);
+        append_floppy_log("Auto-repaired floppy checksums.");
+      }
     }
 
     if (F->numblocks==1440 || F->numblocks==2880 || F->numblocks==5760)

@@ -72,6 +72,7 @@ extern "C" {
     void close_tty(int port);
     // vars.h:
     extern int consoletermwindow;
+    void xenix_log_console_char(uint8 c);
 }
 
 
@@ -230,6 +231,7 @@ extern "C" void write_serial_port_terminal(unsigned int portnum, char data);
 
 // interface for console output from uniplus, Xenix (future), LPW (future)
 extern "C" void lisa_console_output(uint8 c) {
+    xenix_log_console_char(c);
     // if the window isn't opened, or shutting down, ignore, else segfault
     if (!Terminal[CONSOLETERM]) return;
     if (!TerminalFrame[CONSOLETERM]) return;
@@ -374,7 +376,6 @@ TerminalWx::TerminalWx(wxWindow* parent, wxWindowID id, int port,
     SetInitialSize( wxSize(width*m_charWidth, height*m_charHeight) );
     SetClientSize(width*m_charWidth, height*m_charHeight);
     TerminalFrame[port]->SetClientSize((width+2)*m_charWidth, (height+3)*m_charHeight);
-    fprintf(stderr,"%s:%s:%d Set Term size (%d,%d) window size:(%d,%d)",__FILE__,__FUNCTION__,__LINE__, width,height,width*m_charWidth, height*m_charHeight);
 }
 
 
@@ -414,10 +415,6 @@ extern "C" void  lpw_console_output_c(char c) {
 
 
 void TerminalWx::SendBack(int len, char* data) { 
-
-    #ifdef DEBUG
-    fprintf(stderr,"\nSendBackLength: %d\n",len);
-    #endif
     // use this for to send terminalwx console input back to the main my_lisawin keyboard input.
     for (int i=0; i<len; i++)
         if  (data[i]) {
@@ -444,7 +441,6 @@ void TerminalWx::SendBack(char* data) {
                 keystroke_cops( data[i] );
             }
             else if  (!fliflo_buff_is_full(&SCC_READ[this->portnum]))  {
-                fprintf(stderr,"\nSendBack: char\n");
                 fliflo_buff_add(&SCC_READ[this->portnum], data[i]);
                 rx_char_available(this->portnum);
                 #ifdef DEBUG

@@ -31,6 +31,7 @@
 #define IN_PROFILE_C
 #include <vars.h>
 
+extern void xenix_log_note(const char *msg);
 
 
 // what's the size of a Profile image file header (so we can skip the start when doing data...)
@@ -672,14 +673,12 @@ char *profile_event_names[5]=
                                              if (P->StateMachineStep==GET_CMDBLK_STATE && !P->BSYLine)       \
                                                 {P->BSYLine=2;                                               \
                                                 DEBUG_LOG(0,"force State:4b at timeout");     }              \
-                                             else if (P->StateMachineStep!=IDLE_STATE) {                     \
-                                                 DEBUG_LOG(0,"ZZZZZZZ Timeout, back to state 0 ZZZZZZZZZZ"); \
- 	                                             P->StateMachineStep=IDLE_STATE;                             \
-                                                 SET_PROFILE_LOOP_TIMEOUT(TENTH_OF_A_SECOND);                \
-                                                 P->last_cmd=1;                                              \
-                                                 return;    }                                                \
-                                            }                                                                \
-                                        }
+                                               else if (P->StateMachineStep!=IDLE_STATE) {                     \
+                                                    profile_handshake_reset(P,"timeout");                       \
+                                                    return;                                                      \
+                                                 }                                                               \
+                                             }                                                                \
+                                          }
 
 
 // have we gone past x clk cycles since the last time the timeout was set?  useful for faking delays.
@@ -743,8 +742,32 @@ char *profile_state_names[]={
 extern void  apply_los31_hacks(void);
 extern void apply_mw30_hacks(void);
 
+static void profile_handshake_reset(ProFileType *P, const char *reason)
+{
+    if (reason) DEBUG_LOG(0,"Profile handshake reset: %s", reason);
+    if ((running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481) && reason)
+    {
+      char note[192];
+      snprintf(note,sizeof(note),"[xenix-pf-reset] via=%d state=%d reason=%s pa=%02x cmd=%d bsy=%d rrw=%d idxr=%d idxw=%d pc=%08x",
+               P->vianum,P->StateMachineStep,reason,P->VIA_PA,P->CMDLine,P->BSYLine,P->RRWLine,P->indexread,P->indexwrite,reg68k_pc);
+      xenix_log_note(note);
+    }
+    P->StateMachineStep=IDLE_STATE;
+    P->BSYLine=0;
+    P->last_cmd=1;
+    P->last_a_accs=0;
+    P->indexread=4;
+    P->indexwrite=4;
+    SET_PROFILE_LOOP_TIMEOUT(TENTH_OF_A_SECOND);
+}
+
 void ProfileLoop(ProFileType *P, int event)
 {
+    static int xenix_last_state=-1;
+    static int xenix_last_event=-1;
+    static int xenix_last_cmd=-1;
+    static int xenix_last_bsy=-1;
+    static int xenix_last_rrw=-1;
     uint32 blocknumber=0;
 
     if (  !(profile_power & (1<<(P->vianum-2)) )  ) return;
@@ -791,6 +814,38 @@ if (!EVENT_WRITE_NUL)
             DEBUG_LOG(0,"----------------------------------------------------------------------");
     }
     #endif
+
+    if (running_lisa_os==LISA_XENIX_RUNNING)
+    {
+      if (xenix_last_state!=P->StateMachineStep || xenix_last_event!=event ||
+          xenix_last_cmd!=P->CMDLine || xenix_last_bsy!=P->BSYLine || xenix_last_rrw!=P->RRWLine)
+      {
+          static uint32 xenix_pf_seen=0;
+          xenix_pf_seen++;
+          DEBUG_LOG(0,"XENIX_PROFILE event:%d state:%d cmd:%d bsy:%d rrw:%d via_pa:%02x idxr:%d idxw:%d pc:%d/%08x",
+                    event, P->StateMachineStep, P->CMDLine, P->BSYLine, P->RRWLine, P->VIA_PA, P->indexread, P->indexwrite, context, reg68k_pc);
+          if (xenix_pf_seen<1024 || (xenix_pf_seen & 255)==0)
+          {
+            char note[192];
+            snprintf(note,sizeof(note),"[xenix-pf] n=%u ev=%d st=%d den=%d cmd=%d bsy=%d rrw=%d pa=%02x idxr=%d idxw=%d pc=%08x",
+                     xenix_pf_seen,event,P->StateMachineStep,P->DENLine,P->CMDLine,P->BSYLine,P->RRWLine,P->VIA_PA,P->indexread,P->indexwrite,reg68k_pc);
+            xenix_log_note(note);
+          }
+          xenix_last_state=P->StateMachineStep;
+          xenix_last_event=event;
+          xenix_last_cmd=P->CMDLine;
+          xenix_last_bsy=P->BSYLine;
+          xenix_last_rrw=P->RRWLine;
+      }
+    }
+    else if (xenix_last_state!=-1)
+    {
+      xenix_last_state=-1;
+      xenix_last_event=-1;
+      xenix_last_cmd=-1;
+      xenix_last_bsy=-1;
+      xenix_last_rrw=-1;
+    }
 
 
  switch (P->StateMachineStep)
@@ -892,12 +947,12 @@ if (!EVENT_WRITE_NUL)
      //    if ( EVENT_WRITE_ORA)//P->last_a_accs)// now wait for 0x55 ACK from Lisa, else, go back to idle
                 //{
                    if (P->VIA_PA==0x00 && EVENT_WRITE_ORA)  // 2021.09.14 for los1
-                                               {
-                                                 DEBUG_LOG(0,"VIA:%d Got %00x, will go back to idle now. last_a_accs=%d",
-                                                              P->vianum, P->last_a_accs);
-                                                 P->StateMachineStep=IDLE_STATE;
-                                                 return;
-                                               }
+                                                {
+                                                  DEBUG_LOG(0,"VIA:%d Got %00x, will go back to idle now. last_a_accs=%d",
+                                                               P->vianum, P->last_a_accs);
+                                                  profile_handshake_reset(P,"state2-got-00");
+                                                  return;
+                                                }
 
 
                     if (P->VIA_PA!=0x55 && P->VIA_PA!=0x01&& !EVENT_WRITE_ORA) {
@@ -918,15 +973,25 @@ if (!EVENT_WRITE_NUL)
                                                 return;
                                                }
 
-                   // else
-                   if (P->VIA_PA!=0x55 && P->VIA_PA!=0x01 && EVENT_WRITE_ORA)
-                                               {
-                                                 DEBUG_LOG(0,"VIA:%d did not get 55, got %02x, will go back to idle now. last_a_accs=%d",
-                                                              P->vianum,P->VIA_PA,P->last_a_accs);
+                    // On Xenix, occasional 0xff reads here are a floating-bus artifact during handshake;
+                    // coerce to 0x55 so the following CMD-low edge can complete the handshake.
+                    if (P->VIA_PA==0xff && EVENT_WRITE_ORA &&
+                        (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                                {
+                                                  P->VIA_PA=0x55;
+                                                  SET_PROFILE_LOOP_TIMEOUT(TENTH_OF_A_SECOND);
+                                                  xenix_log_note("[xenix-pf-ff] state2 coerced 0xff->0x55");
+                                                }
 
-                                                 P->StateMachineStep=IDLE_STATE;
-                                                 return;
-                                               }
+                    // else
+                     if (P->VIA_PA!=0x55 && P->VIA_PA!=0x01 && EVENT_WRITE_ORA)
+                                                {
+                                                  DEBUG_LOG(0,"VIA:%d did not get 55, got %02x, will go back to idle now. last_a_accs=%d",
+                                                               P->vianum,P->VIA_PA,P->last_a_accs);
+
+                                                  profile_handshake_reset(P,"state2-non55");
+                                                  return;
+                                                }
                 //}
 //         if (P->VIA_PA!=0x55) P->VIA_PA=0x01;                // resend ACK if we got here since we didn't get 0x55.
 
@@ -948,13 +1013,14 @@ case GET_CMDBLK_STATE:           // 4          // now copy command bytes into co
 
          CHECK_PROFILE_LOOP_TIMEOUT;
          
-         if ( (running_lisa_os==LISA_UNIPLUS_RUNNING || running_lisa_os == LISA_UNIPLUS_SUNIX_RUNNING || running_lisa_os == LISA_XENIX_RUNNING) && 
+            if ( (running_lisa_os==LISA_UNIPLUS_RUNNING || running_lisa_os == LISA_UNIPLUS_SUNIX_RUNNING || running_lisa_os == LISA_XENIX_RUNNING) && 
               (TIMEPASSED_PROFILE_LOOP( (HUN_THOUSANDTH_OF_A_SEC/1000)) ) ) {
-              DEBUG_LOG(0,"UniPlus OS, faking BSYLine=1");
+              DEBUG_LOG(0,"UniPlus/Xenix OS, faking BSYLine=1");
               SET_PROFILE_LOOP_NO_PREDELAY(TENTH_OF_A_SECOND); 
-              via[P->vianum].via[IFR] |=VIA_IRQ_BIT_CA1; // force IFR BSY/CA1 bit on //2021.06.13
+              via[P->vianum].via[IFR] |=VIA_IRQ_BIT_CA1;
+              FIX_VIA_IFR(P->vianum);
               P->BSYLine=1; return;
-         }
+          }
          else 
             if (P->BSYLine!=2) {         // wait a bit before flopping busy, but if Lisa sends a byte, accept it
                if ( TIMEPASSED_PROFILE_LOOP( (HUN_THOUSANDTH_OF_A_SEC/100) )  && !(EVENT_WRITE_ORA) ) //was 1/100th HUN_THOUSANDTH_OF_A_SEC 49152, 2021.03.23 add /100
@@ -1075,19 +1141,21 @@ case GET_CMDBLK_STATE:           // 4          // now copy command bytes into co
          if (EVENT_WRITE_NUL) return;
          if (EVENT_WRITE_ORA) //  && P->last_a_accs && P->CMDLine && P->RRWLine)
             {      DEBUG_LOG(0,"State:5: checking what we got:%02x==0x55",P->VIA_PA);
-                  if (P->VIA_PA==0x55)   {
+                   if (P->VIA_PA==0x55)   {
                                           P->StateMachineStep=PARSE_CMD_STATE;
                                           SET_PROFILE_LOOP_TIMEOUT(HALF_OF_A_SECOND);
                                
                                           DEBUG_LOG(0,"State5: got 0x55 w00t!");
                                          }
-                   else
+                    else
                                          {
                                           P->StateMachineStep=0; // possibly our old code
                                           PRO_STATUS_NO55;
                                           DEBUG_LOG(0,"State5: going into state 0 now. oh well.");
+                                          profile_handshake_reset(P,"state5-non55");
+                                          return;
                                          }
-            }
+             }
 
          return;
 
@@ -1236,8 +1304,15 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
          P->BSYLine=1; //no this should always be 1 - do not change it!
          if (EVENT_WRITE_NUL) return;
 
-         if (EVENT_WRITE_ORA)
-            {if (P->VIA_PA==0x55)
+          if (EVENT_WRITE_ORA)
+             {
+              if (P->VIA_PA==0xff &&
+                  (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                {
+                  P->VIA_PA=0x55;
+                  xenix_log_note("[xenix-pf-ff] state8 coerced 0xff->0x55");
+                }
+              if (P->VIA_PA==0x55)
                 {
                  P->StateMachineStep=WRITE_BLOCK_STATE; // accept command
                  SET_PROFILE_LOOP_TIMEOUT(HUN_THOUSANDTH_OF_A_SEC*5);
@@ -1245,10 +1320,13 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
                  PRO_STATUS_GOT55;
                  DEBUG_LOG(0,"Command accepted, transition to Step:9");
                 }
-             else
-                 {P->StateMachineStep=0;
-                  PRO_STATUS_NO55;}
-            }
+              else
+                  {
+                   PRO_STATUS_NO55;
+                   profile_handshake_reset(P,"state8-non55");
+                   return;
+                  }
+             }
          return;
 
 
@@ -1322,8 +1400,6 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
          P->DataBlock[3]=0;
 
          P->BSYLine=0;  //2006.05.17 was 1
-         if (running_lisa_os == LISA_UNIPLUS_SUNIX_RUNNING || running_lisa_os == LISA_XENIX_RUNNING) 
-             via[P->vianum].via[IFR] |=VIA_IRQ_BIT_CA1; // 2021.06.06 - force IFR BSY/CA1 bit on
 
          P->StateMachineStep=SEND_STATUS_BYTES_STATE;
          SET_PROFILE_LOOP_TIMEOUT(HALF_OF_A_SECOND);
@@ -1417,8 +1493,6 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
 
          CHECK_PROFILE_LOOP_TIMEOUT;
 
-         if (running_lisa_os==LISA_UNIPLUS_RUNNING || running_lisa_os == LISA_UNIPLUS_SUNIX_RUNNING || running_lisa_os == LISA_XENIX_RUNNING) 
-             via[P->vianum].via[IFR] |=VIA_IRQ_BIT_CA1; // 2021.06.06 - force IFR BSY/CA1 bit on
          P->BSYLine=0;
 
          if (EVENT_WRITE_NUL || EVENT_READ_IRB) return;

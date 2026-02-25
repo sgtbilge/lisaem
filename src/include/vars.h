@@ -2408,6 +2408,9 @@ extern void   lisa_wb_ram(uint32 addr, uint8 data);
 extern void   lisa_ww_ram(uint32 addr, uint16 data);
 extern void   lisa_wl_ram(uint32 addr, uint32 data);
 
+extern uint16 lisa_rw_phys(uint32 addr);
+extern void   lisa_ww_phys(uint32 addr, uint16 data);
+
 extern uint8  *lisa_mptr_ro_violn(uint32 addr);
 extern uint8  lisa_rb_ro_violn(uint32 addr);
 extern uint16 lisa_rw_ro_violn(uint32 addr);

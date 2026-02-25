@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include <sys/stat.h>
 
 #include <reg68k.h>
 #include <cpu68k.h>
@@ -70,6 +72,805 @@ static int loopy_vector=0;                  // prevent fetch from calling this a
 
 /*** forward references ***/
 extern void lisa_console_output(uint8 c);
+extern void xenix_probe_stdout_candidate(uint32 pc, uint16 opcode);
+extern void xenix_log_note(const char *msg);
+extern void xenix_log_console_char(uint8 c);
+
+static const char *lisa_dbg_cmd_path=".tmp/lisaem-debug-cmd.txt";
+static const char *lisa_dbg_state_path=".tmp/lisaem-debug-state.txt";
+
+static int lisa_dbg_paused=0;
+static int lisa_dbg_steps_remaining=0;
+static int lisa_dbg_mark_valid=0;
+static uint8 *lisa_dbg_mark_ram=NULL;
+static uint32 lisa_dbg_mark_ram_size=0;
+static char lisa_dbg_extra_state[4096];
+static int lisa_dbg_watch_active=0;
+static int lisa_dbg_watch_hibit=0;
+static uint32 lisa_dbg_watch_addr=0xffffffff;
+static char lisa_dbg_watch_last[192];
+static uint32 lisa_dbg_watch_poll_counter=0;
+static t_regs lisa_dbg_mark_regs;
+static uint32 lisa_dbg_mark_pc=0;
+static uint32 lisa_dbg_mark_context=0;
+static uint32 lisa_dbg_mark_segment1=0;
+static uint32 lisa_dbg_mark_segment2=0;
+static uint32 lisa_dbg_mark_start=0;
+static XTIMER lisa_dbg_mark_clocks=0;
+
+static void lisa_dbg_trim(char *s)
+{
+    if (!s) return;
+    size_t n=strlen(s);
+    while (n>0 && (s[n-1]=='\n' || s[n-1]=='\r' || isspace((unsigned char)s[n-1]))) s[--n]=0;
+    size_t p=0;
+    while (s[p] && isspace((unsigned char)s[p])) p++;
+    if (p>0) memmove(s,s+p,strlen(s+p)+1);
+}
+
+static void lisa_dbg_write_state(const char *reason, const char *msg)
+{
+    (void)mkdir(".tmp",0777);
+    FILE *f=fopen(lisa_dbg_state_path,"wt");
+    if (!f) return;
+    fprintf(f,"reason=%s\n",reason ? reason : "unknown");
+    if (msg && msg[0]) fprintf(f,"message=%s\n",msg);
+    fprintf(f,"paused=%d\n",lisa_dbg_paused);
+    fprintf(f,"step_remaining=%d\n",lisa_dbg_steps_remaining);
+    fprintf(f,"pc=%08x\n",reg68k_pc);
+    fprintf(f,"sr=%04x\n",reg68k_sr.sr_int);
+    fprintf(f,"clock=%016llx\n",(long long)cpu68k_clocks);
+    fprintf(f,"d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x d6=%08x d7=%08x\n",
+            reg68k_regs[0],reg68k_regs[1],reg68k_regs[2],reg68k_regs[3],reg68k_regs[4],reg68k_regs[5],reg68k_regs[6],reg68k_regs[7]);
+    fprintf(f,"a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n",
+            reg68k_regs[8],reg68k_regs[9],reg68k_regs[10],reg68k_regs[11],reg68k_regs[12],reg68k_regs[13],reg68k_regs[14],reg68k_regs[15]);
+    fprintf(f,"context=%u seg1=%u seg2=%u start=%u\n",context,segment1,segment2,start);
+    fprintf(f,"mark_valid=%d mark_size=%u\n",lisa_dbg_mark_valid,lisa_dbg_mark_ram_size);
+    if (lisa_dbg_watch_active)
+    {
+        fprintf(f,"watch_addr=%08x\n",lisa_dbg_watch_addr);
+        fprintf(f,"watch_mode=%s\n",lisa_dbg_watch_hibit ? "hibit" : "raw");
+        if (lisa_dbg_watch_last[0]) fprintf(f,"watch_text=%s\n",lisa_dbg_watch_last);
+    }
+    if (lisa_dbg_extra_state[0]) fprintf(f,"%s",lisa_dbg_extra_state);
+    fprintf(f,"commands=pause|run|step [n]|status|mark|rewind|findtext <ascii>|watchtext <ascii>|watchaddr <hex>|unwatch|help\n");
+    fclose(f);
+}
+
+static void lisa_dbg_clear_extra_state(void)
+{
+    lisa_dbg_extra_state[0]=0;
+}
+
+static int lisa_dbg_watch_snapshot(char *out, size_t outsz)
+{
+    if (!out || outsz<2 || !lisa_dbg_watch_active || !lisaram || maxlisaram==0 || lisa_dbg_watch_addr>=maxlisaram) return 0;
+    size_t j=0;
+    for (uint32 i=0; i<96 && j<outsz-1 && (lisa_dbg_watch_addr+i)<maxlisaram; i++)
+    {
+        uint8 c=lisaram[lisa_dbg_watch_addr+i];
+        if (lisa_dbg_watch_hibit) c&=0x7f;
+        if (c==0)
+        {
+            if (j>0) break;
+            continue;
+        }
+        out[j++]=(c==9 || c==10 || c==13 || (c>=32 && c<127)) ? (char)c : '.';
+    }
+    out[j]=0;
+    return j>0;
+}
+
+static void lisa_dbg_watch_poll(void)
+{
+    if (!lisa_dbg_watch_active) return;
+    if (((++lisa_dbg_watch_poll_counter) & 0x1f)!=0) return;
+    char snap[192];
+    if (!lisa_dbg_watch_snapshot(snap,sizeof(snap))) return;
+    if (strcmp(snap,lisa_dbg_watch_last))
+    {
+        snprintf(lisa_dbg_watch_last,sizeof(lisa_dbg_watch_last),"%s",snap);
+        lisa_dbg_write_state("watch-update","watch changed");
+    }
+}
+
+static int lisa_dbg_find_first_text(const char *needle, uint32 *first_out, int *hibit_out, int *hits_out)
+{
+    if (!needle || !needle[0] || !lisaram || maxlisaram==0) return 0;
+    size_t nlen=strlen(needle);
+    if (nlen>128) return 0;
+    uint32 first=0xffffffff;
+    int first_hibit=0;
+    int hits=0;
+    for (uint32 i=0; i + (uint32)nlen <= maxlisaram; i++)
+    {
+        int raw_match=1, hibit_match=1;
+        for (size_t j=0; j<nlen; j++)
+        {
+            uint8 b=lisaram[i+j];
+            uint8 q=(uint8)needle[j];
+            if (b!=q) raw_match=0;
+            if ((b & 0x7f)!=q) hibit_match=0;
+            if (!raw_match && !hibit_match) break;
+        }
+        if (!raw_match && !hibit_match) continue;
+        if (first==0xffffffff) { first=i; first_hibit=(raw_match ? 0 : 1); }
+        hits++;
+    }
+    if (hits<=0 || first==0xffffffff) return 0;
+    if (first_out) *first_out=first;
+    if (hibit_out) *hibit_out=first_hibit;
+    if (hits_out) *hits_out=hits;
+    return 1;
+}
+
+static int lisa_dbg_find_text(const char *needle, char *msg, size_t msgsz)
+{
+    if (!needle) {
+        if (msg && msgsz) snprintf(msg,msgsz,"findtext failed: missing query");
+        return 0;
+    }
+    while (*needle && isspace((unsigned char)*needle)) needle++;
+    if (!needle[0]) {
+        if (msg && msgsz) snprintf(msg,msgsz,"usage: findtext <ascii>");
+        return 0;
+    }
+    if (!lisaram || maxlisaram==0) {
+        if (msg && msgsz) snprintf(msg,msgsz,"findtext failed: RAM unavailable");
+        return 0;
+    }
+
+    size_t nlen=strlen(needle);
+    if (nlen>128) {
+        if (msg && msgsz) snprintf(msg,msgsz,"findtext failed: query too long (%u)",(unsigned int)nlen);
+        return 0;
+    }
+
+    int hits=0;
+    int hits_hibit=0;
+    uint32 first=0;
+    size_t ep=0;
+    ep+=snprintf(lisa_dbg_extra_state+ep,sizeof(lisa_dbg_extra_state)-ep,"findtext_query=%s\n",needle);
+    for (uint32 i=0; i + (uint32)nlen <= maxlisaram; i++)
+    {
+        int raw_match=1, hibit_match=1;
+        for (size_t j=0; j<nlen; j++)
+        {
+            uint8 b=lisaram[i+j];
+            uint8 q=(uint8)needle[j];
+            if (b!=q) raw_match=0;
+            if ((b & 0x7f)!=q) hibit_match=0;
+            if (!raw_match && !hibit_match) break;
+        }
+        if (!raw_match && !hibit_match) continue;
+        if (!hits) first=i;
+        hits++;
+        if (!raw_match && hibit_match) hits_hibit++;
+        if (hits<=8 && ep+96<sizeof(lisa_dbg_extra_state))
+        {
+            char ctx[65];
+            uint32 start=(i>=16) ? (i-16) : 0;
+            uint32 end=i+(uint32)nlen+16;
+            if (end>maxlisaram) end=maxlisaram;
+            size_t cp=0;
+            for (uint32 p=start; p<end && cp<sizeof(ctx)-1; p++)
+            {
+                uint8 c=lisaram[p];
+                ctx[cp++]=(c>=32 && c<127) ? (char)c : '.';
+            }
+            ctx[cp]=0;
+            ep+=snprintf(lisa_dbg_extra_state+ep,sizeof(lisa_dbg_extra_state)-ep,
+                         "findtext_hit%02d=%08x mode=%s %s\n",
+                         hits,i,raw_match ? "raw" : "hibit",ctx);
+        }
+    }
+    if (hits>8 && ep+64<sizeof(lisa_dbg_extra_state))
+        ep+=snprintf(lisa_dbg_extra_state+ep,sizeof(lisa_dbg_extra_state)-ep,"findtext_more=%d\n",hits-8);
+    if (hits && ep+64<sizeof(lisa_dbg_extra_state))
+        ep+=snprintf(lisa_dbg_extra_state+ep,sizeof(lisa_dbg_extra_state)-ep,"findtext_hibit_hits=%d\n",hits_hibit);
+
+    if (msg && msgsz)
+    {
+        if (hits) snprintf(msg,msgsz,"findtext \"%s\": hits=%d first=%08x",needle,hits,first);
+        else snprintf(msg,msgsz,"findtext \"%s\": no matches",needle);
+    }
+    return hits>0;
+}
+
+static int lisa_dbg_save_mark(char *msg, size_t msgsz)
+{
+    if (!lisaram || maxlisaram==0) {
+        if (msg && msgsz) snprintf(msg,msgsz,"mark failed: RAM unavailable");
+        return 0;
+    }
+    if (lisa_dbg_mark_ram_size!=maxlisaram || !lisa_dbg_mark_ram) {
+        uint8 *newram=(uint8 *)realloc(lisa_dbg_mark_ram,maxlisaram);
+        if (!newram) {
+            if (msg && msgsz) snprintf(msg,msgsz,"mark failed: out of memory (%u bytes)",maxlisaram);
+            return 0;
+        }
+        lisa_dbg_mark_ram=newram;
+        lisa_dbg_mark_ram_size=maxlisaram;
+    }
+    memcpy(lisa_dbg_mark_ram,lisaram,maxlisaram);
+    lisa_dbg_mark_regs=regs;
+    lisa_dbg_mark_pc=reg68k_pc;
+    lisa_dbg_mark_context=context;
+    lisa_dbg_mark_segment1=segment1;
+    lisa_dbg_mark_segment2=segment2;
+    lisa_dbg_mark_start=start;
+    lisa_dbg_mark_clocks=cpu68k_clocks;
+    lisa_dbg_mark_valid=1;
+    if (msg && msgsz) snprintf(msg,msgsz,"mark saved: pc=%08x clock=%016llx size=%u",reg68k_pc,(long long)cpu68k_clocks,maxlisaram);
+    return 1;
+}
+
+static int lisa_dbg_restore_mark(char *msg, size_t msgsz)
+{
+    if (!lisa_dbg_mark_valid || !lisa_dbg_mark_ram || lisa_dbg_mark_ram_size==0 || !lisaram) {
+        if (msg && msgsz) snprintf(msg,msgsz,"rewind failed: no mark");
+        return 0;
+    }
+    if (maxlisaram<lisa_dbg_mark_ram_size) {
+        if (msg && msgsz) snprintf(msg,msgsz,"rewind failed: RAM size mismatch (now %u, mark %u)",maxlisaram,lisa_dbg_mark_ram_size);
+        return 0;
+    }
+    memcpy(lisaram,lisa_dbg_mark_ram,lisa_dbg_mark_ram_size);
+    regs=lisa_dbg_mark_regs;
+    reg68k_regs=regs.regs;
+    reg68k_pc=lisa_dbg_mark_pc;
+    reg68k_sr=regs.sr;
+    context=lisa_dbg_mark_context;
+    segment1=lisa_dbg_mark_segment1;
+    segment2=lisa_dbg_mark_segment2;
+    start=lisa_dbg_mark_start;
+    cpu68k_clocks=lisa_dbg_mark_clocks;
+    SET_MMU_DIRTY(0xd06f00d);
+    mmuflush(0x3000);
+    if (msg && msgsz) snprintf(msg,msgsz,"rewound to mark: pc=%08x clock=%016llx",reg68k_pc,(long long)cpu68k_clocks);
+    return 1;
+}
+
+static void lisa_dbg_process_commands(void)
+{
+    (void)mkdir(".tmp",0777);
+    FILE *f=fopen(lisa_dbg_cmd_path,"rt");
+    if (!f) return;
+    char line[256];
+    char msg[256];
+    msg[0]=0;
+    while (fgets(line,sizeof(line),f))
+    {
+        lisa_dbg_clear_extra_state();
+        lisa_dbg_trim(line);
+        if (!line[0]) continue;
+        if (!strcmp(line,"pause")) {
+            lisa_dbg_paused=1;
+            lisa_dbg_steps_remaining=0;
+            snprintf(msg,sizeof(msg),"paused");
+        } else if (!strcmp(line,"run")) {
+            lisa_dbg_paused=0;
+            lisa_dbg_steps_remaining=0;
+            snprintf(msg,sizeof(msg),"running");
+        } else if (!strncmp(line,"step",4)) {
+            int n=1;
+            if (line[4]) {
+                int v=atoi(line+4);
+                if (v>0) n=v;
+            }
+            lisa_dbg_paused=1;
+            lisa_dbg_steps_remaining+=n;
+            snprintf(msg,sizeof(msg),"queued %d step(s), total=%d",n,lisa_dbg_steps_remaining);
+        } else if (!strcmp(line,"status")) {
+            snprintf(msg,sizeof(msg),"status");
+        } else if (!strcmp(line,"mark")) {
+            lisa_dbg_save_mark(msg,sizeof(msg));
+        } else if (!strcmp(line,"rewind")) {
+            if (lisa_dbg_restore_mark(msg,sizeof(msg))) {
+                lisa_dbg_paused=1;
+                lisa_dbg_steps_remaining=0;
+            }
+        } else if (!strncmp(line,"findtext",8)) {
+            char needle[160];
+            const char *arg=line+8;
+            while (*arg && isspace((unsigned char)*arg)) arg++;
+            if (!arg[0]) {
+                snprintf(msg,sizeof(msg),"usage: findtext <ascii>");
+            } else if ((*arg=='\"' || *arg=='\'') && arg[1]) {
+                char q=*arg++;
+                size_t n=0;
+                while (*arg && *arg!=q && n<sizeof(needle)-1) needle[n++]=*arg++;
+                needle[n]=0;
+                lisa_dbg_find_text(needle,msg,sizeof(msg));
+            } else {
+                snprintf(needle,sizeof(needle),"%s",arg);
+                lisa_dbg_find_text(needle,msg,sizeof(msg));
+            }
+        } else if (!strncmp(line,"watchtext",9)) {
+            char needle[160];
+            const char *arg=line+9;
+            uint32 first=0xffffffff;
+            int hibit=0, hits=0;
+            while (*arg && isspace((unsigned char)*arg)) arg++;
+            if (!arg[0]) {
+                snprintf(msg,sizeof(msg),"usage: watchtext <ascii>");
+            } else {
+                snprintf(needle,sizeof(needle),"%s",arg);
+                if (lisa_dbg_find_first_text(needle,&first,&hibit,&hits))
+                {
+                    lisa_dbg_watch_active=1;
+                    lisa_dbg_watch_addr=first;
+                    lisa_dbg_watch_hibit=hibit;
+                    lisa_dbg_watch_last[0]=0;
+                    lisa_dbg_watch_snapshot(lisa_dbg_watch_last,sizeof(lisa_dbg_watch_last));
+                    snprintf(msg,sizeof(msg),"watching %08x (%s), hits=%d",first,hibit ? "hibit":"raw",hits);
+                }
+                else snprintf(msg,sizeof(msg),"watchtext \"%s\": no matches",needle);
+            }
+        } else if (!strncmp(line,"watchaddr",9)) {
+            char *endp=NULL;
+            unsigned long a=strtoul(line+9,&endp,0);
+            while (endp && *endp && isspace((unsigned char)*endp)) endp++;
+            if ((endp && *endp!=0) || a>=maxlisaram) {
+                snprintf(msg,sizeof(msg),"usage: watchaddr <hex>");
+            } else {
+                lisa_dbg_watch_active=1;
+                lisa_dbg_watch_hibit=0;
+                lisa_dbg_watch_addr=(uint32)a;
+                lisa_dbg_watch_last[0]=0;
+                lisa_dbg_watch_snapshot(lisa_dbg_watch_last,sizeof(lisa_dbg_watch_last));
+                snprintf(msg,sizeof(msg),"watching %08x",lisa_dbg_watch_addr);
+            }
+        } else if (!strcmp(line,"unwatch")) {
+            lisa_dbg_watch_active=0;
+            lisa_dbg_watch_addr=0xffffffff;
+            lisa_dbg_watch_last[0]=0;
+            snprintf(msg,sizeof(msg),"watch disabled");
+        } else if (!strcmp(line,"help")) {
+            snprintf(msg,sizeof(msg),"commands: pause|run|step [n]|status|mark|rewind|findtext <ascii>|watchtext <ascii>|watchaddr <hex>|unwatch");
+        } else {
+            snprintf(msg,sizeof(msg),"unknown command: %s",line);
+        }
+    }
+    fclose(f);
+    remove(lisa_dbg_cmd_path);
+    lisa_dbg_write_state("command",msg);
+}
+
+static int xenix_read_cstr(uint32 addr, char *out, size_t outsz)
+{
+    if (!out || outsz<2 || addr>=0x01000000) return 0;
+    int saved_abort=abort_opcode;
+    size_t j=0;
+    for (; j<outsz-1; j++)
+    {
+      abort_opcode=2;
+      uint8 c=fetchbyte((addr+j) & 0x00ffffff);
+      if (abort_opcode) { abort_opcode=saved_abort; return 0; }
+      out[j]=(char)c;
+      if (c==0) break;
+      if (!(c==9 || c==10 || c==13 || (c>=32 && c<127))) { out[0]=0; abort_opcode=saved_abort; return 0; }
+    }
+    out[(j<outsz)?j:outsz-1]=0;
+    abort_opcode=saved_abort;
+    return out[0]!=0;
+}
+
+static int xenix_sample_bytes(uint32 addr, uint8 *out, uint32 len)
+{
+    if (!out || len==0 || addr>=0x01000000) return 0;
+    int saved_abort=abort_opcode;
+    for (uint32 i=0; i<len; i++)
+    {
+      abort_opcode=2;
+      out[i]=fetchbyte((addr+i) & 0x00ffffff);
+      if (abort_opcode) { abort_opcode=saved_abort; return 0; }
+    }
+    abort_opcode=saved_abort;
+    return 1;
+}
+
+static int xenix_read_text_at(uint32 addr, char *out, size_t outsz, int strip_hibit)
+{
+    if (!out || outsz<2 || addr>=0x01000000) return 0;
+    int saved_abort=abort_opcode;
+    size_t j=0;
+    for (; j<outsz-1; j++)
+    {
+      abort_opcode=2;
+      uint8 c=fetchbyte((addr+j) & 0x00ffffff);
+      if (abort_opcode) { abort_opcode=saved_abort; return 0; }
+      if (strip_hibit) c&=0x7f;
+      if (c==0) break;
+      if (!(c==9 || c==10 || c==13 || (c>=32 && c<127))) { out[0]=0; abort_opcode=saved_abort; return 0; }
+      out[j]=(char)c;
+    }
+    out[j]=0;
+    abort_opcode=saved_abort;
+    return j>=8;
+}
+
+static int xenix_interesting_text(const char *s)
+{
+    if (!s || !s[0]) return 0;
+    return strstr(s,"trap")      || strstr(s,"Trap")      ||
+           strstr(s,"panic")     || strstr(s,"Panic")     ||
+           strstr(s,"error")     || strstr(s,"Error")     ||
+           strstr(s,"supervisor")|| strstr(s,"Supervisor")||
+           strstr(s,"exception") || strstr(s,"Exception");
+}
+
+static int xenix_scan_prefix(uint32 start, uint32 end, const char *prefix, char *out, size_t outsz)
+{
+    if (!prefix || !prefix[0] || !out || outsz<2 || !lisaram || maxlisaram==0) return 0;
+    if (start>=maxlisaram) return 0;
+    if (end>maxlisaram) end=maxlisaram;
+    if (end<=start) return 0;
+    size_t plen=strlen(prefix);
+    if (plen<4 || start + (uint32)plen >= end) return 0;
+
+    for (uint32 i=start; i + (uint32)plen < end; i++)
+    {
+      int match=1;
+      for (size_t k=0; k<plen; k++) {
+        if ((lisaram[i+k] & 0x7f)!=(uint8)prefix[k]) { match=0; break; }
+      }
+      if (!match) continue;
+
+      size_t j=0;
+      for (uint32 p=i; p<end && j<outsz-1; p++)
+      {
+        uint8 c=lisaram[p] & 0x7f;
+        if (c==0 || c==10 || c==13) break;
+        if (!(c==9 || (c>=32 && c<127))) break;
+        out[j++]=(char)c;
+      }
+      out[j]=0;
+      return j>0;
+    }
+    return 0;
+}
+
+static int xenix_scan_rendered_prefix(uint32 start, uint32 end, const char *prefix, int need_digit_after, char *out, size_t outsz)
+{
+    if (!prefix || !prefix[0] || !out || outsz<2 || !lisaram || maxlisaram==0) return 0;
+    if (start>=maxlisaram) return 0;
+    if (end>maxlisaram) end=maxlisaram;
+    if (end<=start) return 0;
+    size_t plen=strlen(prefix);
+    if (plen<4 || start + (uint32)plen >= end) return 0;
+
+    for (uint32 i=start; i + (uint32)plen < end; i++)
+    {
+      int match=1;
+      for (size_t k=0; k<plen; k++) {
+        uint8 b=lisaram[i+k];
+        if ((b!= (uint8)prefix[k]) && ((b & 0x7f)!=(uint8)prefix[k])) { match=0; break; }
+      }
+      if (!match) continue;
+      if (need_digit_after)
+      {
+        uint8 d=lisaram[i+plen] & 0x7f;
+        if (d<'0' || d>'9') continue;
+      }
+
+      size_t j=0;
+      for (uint32 p=i; p<end && j<outsz-1; p++)
+      {
+        uint8 c=lisaram[p] & 0x7f;
+        if (c==0 || c==10 || c==13) break;
+        if (!(c==9 || (c>=32 && c<127))) break;
+        out[j++]=(char)c;
+      }
+      out[j]=0;
+      return j>0;
+    }
+    return 0;
+}
+
+static void xenix_probe_vector_event(uint32 vno, uint32 oldpc, uint32 addr_error)
+{
+    static int v3_stop_armed=1;
+    static XTIMER v3_stop_last_clock=0;
+    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+    if (vno==32) return;
+    if (cpu68k_clocks < v3_stop_last_clock) v3_stop_armed=1;
+    v3_stop_last_clock=cpu68k_clocks;
+
+    if (vno==25 || vno==26)
+    {
+      static XTIMER last_irq_clk=0;
+      if ((cpu68k_clocks-last_irq_clk)<5000000) return;
+      last_irq_clk=cpu68k_clocks;
+    }
+
+    static uint32 last_v=0xffffffff, last_pc=0xffffffff, last_addr=0xffffffff;
+    static XTIMER last_clk=0;
+    if (vno==last_v && oldpc==last_pc && addr_error==last_addr && (cpu68k_clocks-last_clk)<5000000) return;
+    last_v=vno; last_pc=oldpc; last_addr=addr_error; last_clk=cpu68k_clocks;
+
+    char note[224];
+    snprintf(note,sizeof(note),"[xenix-vector] v=%u pc=%08x addr=%08x sr=%04x sp=%08x d0=%08x d1=%08x",
+             vno,oldpc,addr_error,reg68k_sr.sr_int,reg68k_regs[15],reg68k_regs[0],reg68k_regs[1]);
+    xenix_log_note(note);
+
+    {
+      static XTIMER last_render_scan_clk=0;
+      static uint32 last_render_sig=0;
+      if ((cpu68k_clocks-last_render_scan_clk) > 50000)
+      {
+        last_render_scan_clk=cpu68k_clocks;
+        uint32 cand[4]={reg68k_regs[15],reg68k_regs[13],0x007ff000,0x00f00000};
+        for (int ci=0; ci<4; ci++)
+        {
+          uint32 c=cand[ci];
+          uint32 s=(c>0x4000) ? (c-0x4000) : 0;
+          uint32 e=c+0x4000;
+          char dyn[224];
+          if (xenix_scan_rendered_prefix(s,e,"Supervisor Trap ",1,dyn,sizeof(dyn)) ||
+              xenix_scan_rendered_prefix(s,e,"Access address=",0,dyn,sizeof(dyn)) ||
+              xenix_scan_rendered_prefix(s,e,"panic: trap in sys",0,dyn,sizeof(dyn)) ||
+              xenix_scan_rendered_prefix(s,e,"error on dev pf",0,dyn,sizeof(dyn)))
+          {
+            uint32 sig=(vno<<24) ^ oldpc ^ addr_error ^ c;
+            for (int k=0; dyn[k] && k<80; k++) sig=(sig*33) ^ (uint8)dyn[k];
+            if (sig!=last_render_sig)
+            {
+              char dnote[320];
+              snprintf(dnote,sizeof(dnote),"[xenix-rendered] v=%u pc=%08x near=%08x text=%s",vno,oldpc,c,dyn);
+              xenix_log_note(dnote);
+              last_render_sig=sig;
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    if (vno==2 || vno==3)
+    {
+      if (vno==3 && v3_stop_armed)
+      {
+        char smsg[160];
+        char markmsg[160];
+        int markok=lisa_dbg_save_mark(markmsg,sizeof(markmsg));
+        // lisa_dbg_paused=1;
+        // lisa_dbg_steps_remaining=0;
+        snprintf(smsg,sizeof(smsg),"[xenix-trap-stop] first-v3 pc=%08x addr=%08x sp=%08x mark=%s",
+                 oldpc,addr_error,reg68k_regs[15],markok ? "ok" : "failed");
+        xenix_log_note(smsg);
+        lisa_dbg_write_state("trap-stop",smsg);
+        v3_stop_armed=0;
+      }
+
+      static uint32 last_trap_sig=0;
+      uint32 sig=(vno<<24) ^ oldpc ^ addr_error ^ reg68k_regs[15] ^ reg68k_regs[14] ^ reg68k_sr.sr_int;
+      if (sig==last_trap_sig) return;
+      last_trap_sig=sig;
+
+      int saved_abort=abort_opcode;
+      uint16 iw=0xffff;
+      abort_opcode=2;
+      iw=fetchword(oldpc & 0x00ffffff);
+      if (abort_opcode) iw=0xffff;
+      abort_opcode=saved_abort;
+
+      char l1[96], l2[128], l3[160], l4[256], l5[256], dyn[192];
+      snprintf(l1,sizeof(l1),"Supervisor Trap %u",(unsigned)vno);
+      snprintf(l2,sizeof(l2),"Access address=%08XInstr wd=%04X",(unsigned)addr_error,(unsigned)iw);
+      snprintf(l3,sizeof(l3),"&dd=%08X mmu=%08X sr=%08X usp=%08X",(unsigned)reg68k_regs[13],(unsigned)0,(unsigned)reg68k_sr.sr_int,(unsigned)reg68k_regs[15]);
+      snprintf(l4,sizeof(l4),"d0-d7 %08X %08X %08X %08X %08X %08X %08X %08X",
+               (unsigned)reg68k_regs[0],(unsigned)reg68k_regs[1],(unsigned)reg68k_regs[2],(unsigned)reg68k_regs[3],
+               (unsigned)reg68k_regs[4],(unsigned)reg68k_regs[5],(unsigned)reg68k_regs[6],(unsigned)reg68k_regs[7]);
+      snprintf(l5,sizeof(l5),"a0-a7 %08X %08X %08X %08X %08X %08X %08X %08X",
+               (unsigned)reg68k_regs[8],(unsigned)reg68k_regs[9],(unsigned)reg68k_regs[10],(unsigned)reg68k_regs[11],
+               (unsigned)reg68k_regs[12],(unsigned)reg68k_regs[13],(unsigned)reg68k_regs[14],(unsigned)reg68k_regs[15]);
+      xenix_log_note(l1);
+      xenix_log_note(l2);
+      xenix_log_note(l3);
+      xenix_log_note(l4);
+      xenix_log_note(l5);
+      if (xenix_scan_prefix(0x00080000,0x00ffffff,"panic: trap in sys",dyn,sizeof(dyn))) xenix_log_note(dyn);
+      if (xenix_scan_prefix(0x00080000,0x00ffffff,"error on dev pf",dyn,sizeof(dyn))) xenix_log_note(dyn);
+    }
+}
+
+static void xenix_probe_vector_text(uint32 vno, uint32 oldpc)
+{
+    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+    if (vno==32) return; // trap #0 is handled by xenix_probe_trap0_write
+
+    static uint32 vector_seen=0;
+    static uint32 last_sig=0;
+    vector_seen++;
+    if (vector_seen>256 && (vector_seen & 0x7f)!=0) return;
+
+    uint32 cand[16];
+    int n=0;
+    for (int i=8; i<=15 && n<16; i++) cand[n++]=reg68k_regs[i];
+
+    uint32 sp=reg68k_regs[15];
+    int saved_abort=abort_opcode;
+    for (int i=0; i<6 && n<16; i++) {
+      abort_opcode=2;
+      uint32 p=fetchlong((sp + (uint32)(i*4)) & 0x00ffffff);
+      if (!abort_opcode) cand[n++]=p;
+    }
+    abort_opcode=saved_abort;
+
+    for (int i=0; i<n; i++)
+    {
+      uint32 addr=cand[i];
+      if (addr>=0x01000000) continue;
+      for (int j=0; j<i; j++) if (cand[j]==addr) { addr=0xffffffff; break; }
+      if (addr==0xffffffff) continue;
+
+      char text[160];
+      const char *mode="raw";
+      if (!xenix_read_text_at(addr,text,sizeof(text),0)) {
+        if (!xenix_read_text_at(addr,text,sizeof(text),1)) continue;
+        mode="hibit";
+      }
+      if (!xenix_interesting_text(text)) continue;
+
+      uint32 sig=addr ^ vno ^ oldpc;
+      for (int k=0; text[k] && k<48; k++) sig=(sig*33) ^ (uint8)text[k];
+      if (sig==last_sig) continue;
+      last_sig=sig;
+
+      char note[320];
+      snprintf(note,sizeof(note),"[xenix-vector-text] v=%u pc=%08x sp=%08x addr=%08x mode=%s text=%s",
+               vno,oldpc,sp,addr,mode,text);
+      xenix_log_note(note);
+      return;
+    }
+}
+
+static void xenix_probe_trap0_write(uint32 oldpc, uint32 usp)
+{
+    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+    int saved_abort=abort_opcode;
+    uint8 saved_fc=CPU_function_code;
+    CPU_function_code=1; // user data space
+
+    static uint32 trap0_seen=0;
+    uint32 sysno=reg68k_regs[0] & 0x0000ffff;
+    trap0_seen++;
+    if (trap0_seen<128 || (trap0_seen & 1023)==0) {
+      char t0[160];
+      snprintf(t0,sizeof(t0),"[xenix-trap0] n=%u sys=%u d1=%08x d2=%08x d3=%08x a0=%08x a1=%08x usp=%08x pc=%08x",
+               trap0_seen,sysno,reg68k_regs[1],reg68k_regs[2],reg68k_regs[3],reg68k_regs[8],reg68k_regs[9],usp,oldpc);
+      xenix_log_note(t0);
+    }
+    if (sysno==5 || sysno==8 || sysno==59) {
+      char path[128], note[176];
+      if (xenix_read_cstr(reg68k_regs[1],path,sizeof(path))) {
+        snprintf(note,sizeof(note),"[xenix-trap0-path] sys=%u path=%s",sysno,path);
+        xenix_log_note(note);
+      }
+    }
+
+    uint32 s0l=0,s1l=0,s2l=0;
+    uint16 s0w=0,s1w=0,s2w=0,s3w=0,s4w=0;
+    int have_stack=0;
+    abort_opcode=2;
+    s0l=fetchlong((usp+0) & 0x00ffffff);
+    s1l=fetchlong((usp+4) & 0x00ffffff);
+    s2l=fetchlong((usp+8) & 0x00ffffff);
+    s0w=fetchword((usp+0) & 0x00ffffff);
+    s1w=fetchword((usp+2) & 0x00ffffff);
+    s2w=fetchword((usp+4) & 0x00ffffff);
+    s3w=fetchword((usp+6) & 0x00ffffff);
+    s4w=fetchword((usp+8) & 0x00ffffff);
+    if (!abort_opcode) have_stack=1;
+    abort_opcode=saved_abort;
+
+    struct xenix_syscand_t { uint32 fd,buf,cnt; const char *tag; };
+    struct xenix_syscand_t cand[8];
+    int n=0;
+    cand[n++] = (struct xenix_syscand_t){reg68k_regs[1], reg68k_regs[2], reg68k_regs[3], "d1,d2,d3"};
+    cand[n++] = (struct xenix_syscand_t){reg68k_regs[1], reg68k_regs[9], reg68k_regs[8], "d1,a1,a0"};
+    if (have_stack) {
+      cand[n++] = (struct xenix_syscand_t){s0l, s1l, s2l, "sp+0,+4,+8 long"};
+      cand[n++] = (struct xenix_syscand_t){s0w, ((uint32)s1w<<16)|s2w, s3w, "sp+0w,+2l,+6w"};
+      cand[n++] = (struct xenix_syscand_t){s0w, s1l, s4w, "sp+0w,+4l,+8w"};
+    }
+    if (reg68k_regs[9] < 0x01000000) {
+      uint32 ap=reg68k_regs[9];
+      abort_opcode=2;
+      uint32 a0l=fetchlong((ap+0) & 0x00ffffff), a1l=fetchlong((ap+4) & 0x00ffffff), a2l=fetchlong((ap+8) & 0x00ffffff);
+      uint16 a0w=fetchword((ap+0) & 0x00ffffff), a1w=fetchword((ap+2) & 0x00ffffff), a2w=fetchword((ap+4) & 0x00ffffff), a3w=fetchword((ap+6) & 0x00ffffff), a4w=fetchword((ap+8) & 0x00ffffff);
+      if (!abort_opcode) {
+        cand[n++] = (struct xenix_syscand_t){a0l, a1l, a2l, "a1+0,+4,+8 long"};
+        cand[n++] = (struct xenix_syscand_t){a0w, ((uint32)a1w<<16)|a2w, a3w, "a1+0w,+2l,+6w"};
+        cand[n++] = (struct xenix_syscand_t){a0w, a1l, a4w, "a1+0w,+4l,+8w"};
+      }
+      abort_opcode=saved_abort;
+    }
+
+    static uint32 trap0_badreads=0;
+    static uint32 trap0_sys4_diag=0;
+    static uint32 trap0_sys4_raw=0;
+    for (int i=0; i<n; i++)
+    {
+      uint32 fd=cand[i].fd, buf=cand[i].buf, cnt=cand[i].cnt;
+      int fd_ok=(fd<=31);
+      int cnt_ok=(cnt>0 && cnt<=2048);
+      int buf_ok=(buf<0x01000000);
+      if (sysno==4 && trap0_sys4_raw<64) {
+        char raw[224];
+        snprintf(raw,sizeof(raw),"[xenix-trap0-candraw] sys=%u abi=%s fd=%u buf=%08x cnt=%u ok=%d%d%d",
+                 sysno,cand[i].tag,fd,buf,cnt,fd_ok,cnt_ok,buf_ok);
+        xenix_log_note(raw);
+        trap0_sys4_raw++;
+      }
+      if (!fd_ok || !cnt_ok || !buf_ok) continue;
+
+      uint32 sample=cnt>200 ? 200 : cnt;
+      uint32 printable=0;
+      uint8 data[201];
+      int candidate_bad=0;
+      for (uint32 j=0; j<sample; j++)
+      {
+        abort_opcode=2;
+        data[j]=fetchbyte((buf+j) & 0x00ffffff);
+        if (abort_opcode) { candidate_bad=1; break; }
+        if (data[j]==9 || data[j]==10 || data[j]==13 || data[j]==27 || (data[j]>=32 && data[j]<127)) printable++;
+      }
+      abort_opcode=saved_abort;
+      if (candidate_bad) {
+        // Fallback probe: read physical RAM directly when MMU-virtual read faults in trap context.
+        uint32 printable_ram=0;
+        for (uint32 j=0; j<sample; j++) {
+          data[j]=lisa_rb_ram((buf+j) & 0x00ffffff);
+          if (data[j]==9 || data[j]==10 || data[j]==13 || data[j]==27 || (data[j]>=32 && data[j]<127)) printable_ram++;
+        }
+        if (sysno==4 && printable_ram*4 >= sample) {
+          char nram[208];
+          snprintf(nram,sizeof(nram),"[xenix-trap0-ram] sys=%u fd=%u buf=%08x cnt=%u abi=%s",sysno,fd,buf,cnt,cand[i].tag);
+          xenix_log_note(nram);
+          for (uint32 j=0; j<sample; j++) xenix_log_console_char(data[j]);
+          xenix_log_console_char('\n');
+          CPU_function_code=saved_fc;
+          return;
+        }
+        trap0_badreads++;
+        if (trap0_badreads<64 || (trap0_badreads & 1023)==0) {
+          char nbad[196];
+          snprintf(nbad,sizeof(nbad),"[xenix-trap0-badread] sys=%u fd=%u buf=%08x cnt=%u abi=%s",sysno,fd,buf,cnt,cand[i].tag);
+          xenix_log_note(nbad);
+        }
+        continue;
+      }
+
+      if (sysno==4 && trap0_sys4_diag<48) {
+        uint8 h[16];
+        if (xenix_sample_bytes(buf,h,16)) {
+          char hx[64], as[32], line[256];
+          int hp=0, ap=0;
+          for (int k=0; k<16; k++) {
+            hp+=snprintf(hx+hp,sizeof(hx)-hp,"%02x",h[k]);
+            as[ap++]=(h[k]>=32 && h[k]<127) ? (char)h[k] : '.';
+          }
+          as[ap]=0;
+          snprintf(line,sizeof(line),"[xenix-trap0-cand] sys=%u abi=%s fd=%u buf=%08x cnt=%u pr=%u/%u h16=%s a16=%s",
+                   sysno,cand[i].tag,fd,buf,cnt,printable,sample,hx,as);
+          xenix_log_note(line);
+          trap0_sys4_diag++;
+        }
+      }
+      if (printable*4 < sample) continue;
+
+      char note[196];
+      snprintf(note,sizeof(note),"[xenix-trap0-buf] sys=%u fd=%u buf=%08x cnt=%u abi=%s",sysno,fd,buf,cnt,cand[i].tag);
+      xenix_log_note(note);
+      for (uint32 j=0; j<sample; j++) xenix_log_console_char(data[j]);
+      xenix_log_console_char('\n');
+      CPU_function_code=saved_fc;
+      return;
+    }
+    CPU_function_code=saved_fc;
+}
 
 #ifdef DEBUG
 
@@ -1550,6 +2351,7 @@ int32 reg68k_external_execute(int32 clocks)
 static t_ipc *ipc;
 static mmu_trans_t *mt;
 static uint32 last_pc;
+static uint32 dbg_poll_counter=0;
 
 #ifdef DEBUG
   if  ( !atexitset)
@@ -1564,6 +2366,7 @@ static uint32 last_pc;
 
 {
     last_bus_error_pc=0;
+    lisa_dbg_process_commands();
 
     if ( (reg68k_pc) & 1  || (regs.pc &1)  )  LISA_REBOOTED(0);
 
@@ -1577,6 +2380,7 @@ static uint32 last_pc;
 
     lastpc24=pc24;
     clks_stop=MIN(clks_stop,cpu68k_clocks_stop);
+    if (lisa_dbg_paused && lisa_dbg_steps_remaining<=0) return entry_stop-cpu68k_clocks;
 
     DEBUG_LOG(0,"\n\ncpu68k_clocks is:%016llx before entering do-while loop\nwill expire at %016llx",(long long)cpu68k_clocks,
                 (long long)clks_stop);
@@ -1714,6 +2518,7 @@ static uint32 last_pc;
                 abort_opcode=0;          // clear any addr/bus errors/traps/etc that may have occured.
 
                 InstructionRegister=ipc->opcode;
+                xenix_probe_stdout_candidate(pc24,InstructionRegister);
 
                 
                 if   (ipc->function)                               // if the IPC is valid, and loaded            // valgrind:==24726== Conditional jump or move depends on uninitialised value(s)
@@ -1780,6 +2585,7 @@ static uint32 last_pc;
                             }
                         else {
                               InstructionRegister=ipc->opcode;
+                              xenix_probe_stdout_candidate(pc24,InstructionRegister);
                               abort_opcode=0;
                               #if defined(DEBUG) && defined(CPU_CORE_TESTER)
                               reg68k_ext_core_tester_pre();
@@ -1810,6 +2616,20 @@ static uint32 last_pc;
                     pc24 = reg68k_pc;
                     abort_opcode=0;
                     cpu68k_clocks+=ipc->clks;
+                    if (lisa_dbg_steps_remaining>0)
+                    {
+                        lisa_dbg_steps_remaining--;
+                        if (lisa_dbg_steps_remaining<=0)
+                        {
+                            lisa_dbg_steps_remaining=0;
+                            lisa_dbg_paused=1;
+                            lisa_dbg_write_state("step-complete","step budget exhausted");
+                            clks_stop=cpu68k_clocks;
+                        }
+                    }
+                    if (((++dbg_poll_counter) & 0x3f)==0 || lisa_dbg_paused) lisa_dbg_process_commands();
+                    lisa_dbg_watch_poll();
+                    if (lisa_dbg_paused && lisa_dbg_steps_remaining<=0) clks_stop=cpu68k_clocks;
               } // if execute from ram/rom else statement
 
     #ifdef DEBUG
@@ -2207,6 +3027,12 @@ void reg68k_internal_vector(int vno, uint32 oldpc, uint32 addr_error)
         }
 
     lastclk =cpu68k_clocks;   lastvno =vno;   lastoldpc =oldpc;
+
+    if (vno==32 && !old_supervisor) xenix_probe_trap0_write(oldpc,reg68k_regs[15]);
+    else {
+      xenix_probe_vector_event((uint32)vno,oldpc,addr_error);
+      xenix_probe_vector_text((uint32)vno,oldpc);
+    }
 
 
     if (avno>0 && avno<8)                // If it's an autovector, check the IRQ mask before allowing it to occur.

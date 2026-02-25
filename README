@@ -51,6 +51,33 @@ Usage: lisaem [-h] [-p] [-q] [-f <str>] [-d] [-F[-]] [-z <double>] [-s[-]] [-c <
   -o, --originctr       skinless mode: center video(-o) vs topleft(-o-)
 ```
 
+## ROM and Lisa Compatibility Matrix
+
+This matrix reflects practical compatibility for this codebase and current emulator behavior.
+
+| Target | Boot ROM | I/O ROM | Storage Setup | Status | Confidence |
+|---|---|---|---|---|---|
+| Lisa Office System 3.x | Lisa 2 H ROM pair (341-0175 + 341-0176) | A8 | ProFile on motherboard parallel, LOS disk/profile image | Works well | High |
+| MacWorks XL 3.0 | Mac XL ROM pair (341-0346 + 341-0347) or Lisa 2 H pair | 88 or A8 (try 88 first for 2/10-style setups) | Floppy boot required; ProFile/Widget image as needed | Works | Medium |
+| UniPlus v1.4 (preinstalled image) | Lisa 2 H ROM pair (341-0175 + 341-0176) | A8 | Boot from prepared image, ProFile path configured | Works from preinstalled images | Medium |
+
+### Not Reliable / Known-Bad
+
+| Target | Notes |
+|---|---|
+| UniPlus fresh install | Fails (kernel v1.1 path not supported) |
+| Xenix | Partially boots, fails before login |
+| MacWorks XL 3.1+ | Does not boot |
+
+### ROM Sets to Keep Available
+
+- Lisa 2 boot pair: 341-0175 + 341-0176
+- Dual Parallel card ROM (optional): 341-0193
+- Lisa 2/10 disk ROM: 341-0281
+- Lisa 2/5 disk ROM: 341-0290
+- Mac XL boot pair: 341-0346 + 341-0347
+- Mac XL 800k variant: 341-8003
+
 ## 2021.01.15
 
 Added TerminalWx vt100 terminal widget, xmodem for interfacing with BLU

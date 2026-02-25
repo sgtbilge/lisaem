@@ -64,6 +64,7 @@
 #endif
 
 #include <unistd.h>
+#include <sys/stat.h>
 
 
 
@@ -84,6 +85,24 @@ int irq_on_next_rx_char[2];
 #define IMSK (reg68k_sr.sr_struct.i0 | (reg68k_sr.sr_struct.i1<<1) | (reg68k_sr.sr_struct.i2<<2) )
 static  int sentbytes[2];
 static  XTIMER sentbytes_start[2];
+static FILE *xenix_tty_log=NULL;
+
+static void scc_log_xenix_tty(uint8 port, uint8 data)
+{
+    if (running_lisa_os!=LISA_XENIX_RUNNING) return;
+    if (!xenix_tty_log)
+    {
+      (void)mkdir(".tmp",0777);
+      xenix_tty_log=fopen(".tmp/lisaem-xenix-tty.txt","w");
+      if (!xenix_tty_log) return;
+      fprintf(xenix_tty_log,"# LisaEm Xenix SCC tty capture\n");
+    }
+    if (data==9 || data==10 || data==13 || (data>=32 && data<127))
+      fprintf(xenix_tty_log,"[%c] %c",port ? 'A':'B',data);
+    else
+      fprintf(xenix_tty_log,"[%c] <0x%02x>\n",port ? 'A':'B',data);
+    fflush(xenix_tty_log);
+}
 
 
 // Defines for the above -- hmmm, not really using these...
@@ -937,6 +956,7 @@ void lisa_wb_Oxd200_sccz8530(uint32 address,uint8 data)
           if ( scc_w[port].s.wr14.r.auto_echo)    {DEBUG_LOG(0,"autoecho is on");  fliflo_buff_add(&SCC_READ[port],data & scc_bits_per_char_mask[port]);}  // copy to receive buffer too, as in loopback
 
           // if there's an attach function/method, call it.
+          scc_log_xenix_tty(port,data);
           if (scc_fn[port].write_serial_port )    {ALERT_LOG(0,"write to write_serial_port_method byte:0x%02x (%d) XON-enabled?:%d xoff:%d",data,data,xonenabled[port],xoffflag[port]);
                                                    scc_fn[port].write_serial_port(port,data);
                                                    TX_BUFF_EMPTY(port);
@@ -1826,4 +1846,3 @@ void write_serial_port(unsigned port, char data)
 
 // 30156-/usr/bin/x86_64-w64-mingw32-ld: obj/z8530.o:z8530.c:(.text+0x6fb): undefined reference to `read_serial_port_pty'
 // 30157-/usr/bin/x86_64-w64-mingw32-ld: obj/z8530.o:z8530.c:(.text+0x8e9): undefined reference to `poll_telnet_serial_read'
-

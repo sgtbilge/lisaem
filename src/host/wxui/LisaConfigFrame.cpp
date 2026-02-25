@@ -31,6 +31,8 @@
 #include <wx/frame.h>
 #include <wx/panel.h>
 #include <wx/notebook.h>
+#include <wx/scrolwin.h>
+#include <wx/sizer.h>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
 
@@ -168,7 +170,7 @@ const int idbl[4]={0, ID_PICK_PROFILESB1L, ID_PICK_PROFILESB2L, ID_PICK_PROFILES
 // using wxID_ANY for lower for some reason(why?), idbl - button lower line ~493
 
 LisaConfigFrame::LisaConfigFrame(const wxString& title, LisaConfig *lisaconfig)
-    : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(480*HIDPISCALE,460*HIDPISCALE),
+  : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(620*HIDPISCALE,560*HIDPISCALE),
                  wxDEFAULT_FRAME_STYLE|wxCLIP_CHILDREN |//|wxNO_FULL_REPAINT_ON_RESIZE)
                  wxMINIMIZE_BOX|wxMAXIMIZE_BOX|wxRESIZE_BORDER|wxSYSTEM_MENU|wxCAPTION|
                  wxTAB_TRAVERSAL|wxCLOSE_BOX|wxNO_FULL_REPAINT_ON_RESIZE)
@@ -208,17 +210,47 @@ LisaConfigFrame::LisaConfigFrame(const wxString& title, LisaConfig *lisaconfig)
   slotcard[0]=_T("Dual Parallel");
   slotcard[1]=_T("Nothing");
 
-    SetSizeHints((int)(420*HIDPISCALE), (int)(380*HIDPISCALE));
+    const int minW = (int)(420 * HIDPISCALE);
+    const int minH = (int)(360 * HIDPISCALE);
+    SetSizeHints(minW, minH);
 
     // Reduced height from 650 to 560 to fit on screens with notch/menu bar
-  thenoteBook =
-                        new wxNotebook(this, ID_NOTEBOOK,  wxDefaultPosition, wxSize(480*HIDPISCALE, 410*HIDPISCALE) );
+  thenoteBook = new wxNotebook(this, ID_NOTEBOOK, wxDefaultPosition, wxDefaultSize);
   CreateNotebook(thenoteBook);
 
-  (void)new wxStaticText(this, ID_PREFS_HINT, _T("Apply saves all tabs. Turn Lisa off before changing ProFile paths."),
-                         wxPoint(10 * HIDPISCALE, 505 * HIDPISCALE), wxSize(330 * HIDPISCALE, 30 * HIDPISCALE));
-  (void)new wxButton(this, ID_REVERT, wxT("Revert"), wxPoint(360 * HIDPISCALE, 505 * HIDPISCALE), wxDefaultSize);
-  b_apply = new wxButton(this, ID_APPLY, wxT("Apply"), wxPoint(445 * HIDPISCALE, 505 * HIDPISCALE), wxDefaultSize);
+    wxWindow *hint = new wxStaticText(this, ID_PREFS_HINT, _T("Apply saves all tabs. Turn Lisa off before changing ProFile paths."));
+    wxWindow *revertBtn = new wxButton(this, ID_REVERT, wxT("Revert"));
+  b_apply = new wxButton(this, ID_APPLY, wxT("Apply"));
+
+    wxBoxSizer *footerSizer = new wxBoxSizer(wxHORIZONTAL);
+    footerSizer->Add(hint, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, (int)(8 * HIDPISCALE));
+    footerSizer->Add(revertBtn, 0, wxRIGHT, (int)(8 * HIDPISCALE));
+    footerSizer->Add(b_apply, 0);
+
+    wxBoxSizer *rootSizer = new wxBoxSizer(wxVERTICAL);
+    rootSizer->Add(thenoteBook, 1, wxEXPAND);
+    rootSizer->Add(footerSizer, 0, wxEXPAND | wxALL, (int)(10 * HIDPISCALE));
+    SetSizer(rootSizer);
+
+    // Keep initial size usable on smaller displays/notched menu bars by
+    // clamping to the current display work area.
+    {
+        wxRect work = wxGetClientDisplayRect();
+        const int prefW = (int)(620 * HIDPISCALE);
+        const int prefH = (int)(560 * HIDPISCALE);
+        const int maxW = wxMax(minW, work.GetWidth() - (int)(40 * HIDPISCALE));
+        const int maxH = wxMax(minH, work.GetHeight() - (int)(40 * HIDPISCALE));
+        const int initW = wxMin(prefW, maxW);
+        const int initH = wxMin(prefH, maxH);
+        SetSize(initW, initH);
+
+      int px = work.x + (work.GetWidth()  - initW) / 2;
+      int py = work.y + (work.GetHeight() - initH) / 2;
+      if (px < work.x) px = work.x;
+      if (py < work.y) py = work.y;
+      SetPosition(wxPoint(px, py));
+    }
+
   RelayoutResponsive();
 }
 
@@ -240,103 +272,44 @@ void LisaConfigFrame::RelayoutResponsive(void)
 {
     if (!thenoteBook) return;
 
-    int cw, ch;
-    GetClientSize(&cw, &ch);
-
     const int margin = (int)(10 * HIDPISCALE);
-    const int rightGap = (int)(8 * HIDPISCALE);
-    const int actionBtnW = (int)(80 * HIDPISCALE);
-    const int browseBtnW = (int)(100 * HIDPISCALE);
-    const int minFieldW = (int)(180 * HIDPISCALE);
 
-    int footerY = ch - (int)(36 * HIDPISCALE);
-    int notebookH = footerY - margin;
-    if (notebookH < (int)(280 * HIDPISCALE)) notebookH = (int)(280 * HIDPISCALE);
-    thenoteBook->SetSize(0, 0, cw, notebookH);
+    if (GetSizer()) GetSizer()->Layout();
 
-    wxWindow *hint = FindWindow(ID_PREFS_HINT);
-    if (hint) hint->SetSize(margin, footerY + (int)(4 * HIDPISCALE), cw - (actionBtnW * 2 + margin * 4), -1);
-
-    wxWindow *revertBtn = FindWindow(ID_REVERT);
-    if (revertBtn) revertBtn->SetSize(cw - (actionBtnW * 2 + margin), footerY, actionBtnW, -1);
-    if (b_apply) b_apply->SetSize(cw - (actionBtnW + margin), footerY, actionBtnW, -1);
-
-    auto right_anchor_page = [&](wxPanel *panel, wxTextCtrl *field, wxWindow *button, int buttonWidth)
+    auto update_page_scroll = [&](wxWindow *page)
     {
-        if (!panel || !field) return;
-        const int pw = panel->GetClientSize().GetWidth();
-        const int btnX = pw - buttonWidth - margin;
-        int fieldW = pw - margin - rightGap - buttonWidth - margin;
-        if (fieldW < minFieldW) fieldW = minFieldW;
-        field->SetSize(margin, field->GetPosition().y, fieldW, -1);
-        if (button) button->SetSize(btnX, button->GetPosition().y, buttonWidth, -1);
+        wxScrolledWindow *scrolled = wxDynamicCast(page, wxScrolledWindow);
+        if (!scrolled) return;
+
+        int pageW = scrolled->GetClientSize().GetWidth();
+        if (pageW < 1) pageW = 1;
+
+        int contentBottom = 0;
+        const wxWindowList& children = scrolled->GetChildren();
+        for (wxWindowList::const_iterator it = children.begin(); it != children.end(); ++it)
+        {
+            wxWindow *child = *it;
+            if (!child || !child->IsShown()) continue;
+
+            wxRect r = child->GetRect();
+            if (r.GetBottom() > contentBottom) contentBottom = r.GetBottom();
+        }
+
+        int virtualH = contentBottom + margin * 2;
+        if (virtualH < 1) virtualH = 1;
+
+        scrolled->SetVirtualSize(pageW, virtualH);
+        scrolled->FitInside();
+        scrolled->SetScrollRate(0, (int)wxMax(8, (int)(16 * HIDPISCALE)));
     };
 
-    wxPanel *general = wxDynamicCast(thenoteBook->GetPage(0), wxPanel);
-    if (general)
+    for (size_t i = 0; i < thenoteBook->GetPageCount(); ++i)
     {
-        right_anchor_page(general, serialtxt, general->FindWindow(ID_SERNO_INFO), browseBtnW);
-        right_anchor_page(general, m_rompath, b_rompath, browseBtnW);
-        right_anchor_page(general, m_dprompath, b_dprompath, browseBtnW);
+        wxWindow *page = thenoteBook->GetPage(i);
+        if (!page) continue;
 
-        wxWindow *openPrefs = general->FindWindow(ID_PREFS_OPEN);
-        wxWindow *savePrefs = general->FindWindow(ID_PREFS_SAVEAS);
-        const int pw = general->GetClientSize().GetWidth();
-        const int btnX = pw - actionBtnW - margin;
-        if (savePrefs) savePrefs->SetSize(btnX, savePrefs->GetPosition().y, actionBtnW, -1);
-        if (openPrefs) openPrefs->SetSize(btnX - actionBtnW - rightGap, openPrefs->GetPosition().y, actionBtnW, -1);
-
-        wxWindow *savePram = general->FindWindow(ID_SAVE_PRAM);
-        wxWindow *loadPram = general->FindWindow(ID_LOAD_PRAM);
-        wxWindow *zapPram  = general->FindWindow(ID_ZAP_PRAM);
-        if (savePram && loadPram && zapPram)
-        {
-            const int smallW = (int)(70 * HIDPISCALE);
-            const int rightX = pw - smallW - margin;
-            zapPram->SetSize(rightX, zapPram->GetPosition().y, smallW, -1);
-            loadPram->SetSize(rightX - smallW - rightGap, loadPram->GetPosition().y, smallW, -1);
-            savePram->SetSize(rightX - (smallW + rightGap) * 2, savePram->GetPosition().y, smallW, -1);
-        }
-    }
-
-    wxPanel *ports = wxDynamicCast(thenoteBook->GetPage(1), wxPanel);
-    if (ports)
-    {
-        const int pw = ports->GetClientSize().GetWidth();
-        const int xonX = pw - (int)(120 * HIDPISCALE);
-        if (serialaparam)
-        {
-            int w = pw - margin - rightGap - (int)(140 * HIDPISCALE);
-            if (w < minFieldW) w = minFieldW;
-            serialaparam->SetSize(margin, serialaparam->GetPosition().y, w, -1);
-        }
-        if (serialbparam)
-        {
-            int w = pw - margin - rightGap - (int)(140 * HIDPISCALE);
-            if (w < minFieldW) w = minFieldW;
-            serialbparam->SetSize(margin, serialbparam->GetPosition().y, w, -1);
-        }
-        if (serialaxon) serialaxon->SetPosition(wxPoint(xonX, serialaxon->GetPosition().y));
-        if (serialbxon) serialbxon->SetPosition(wxPoint(xonX, serialbxon->GetPosition().y));
-        right_anchor_page(ports, m_propath, b_propath, browseBtnW);
-    }
-
-    for (int slot=1; slot<=3; slot++)
-    {
-        wxPanel *slotPanel = wxDynamicCast(thenoteBook->GetPage(slot+1), wxPanel);
-        if (!slotPanel) continue;
-        right_anchor_page(slotPanel, m_text_propathh[slot], slotPanel->FindWindow(idbh[slot]), browseBtnW);
-        right_anchor_page(slotPanel, m_text_propathl[slot], slotPanel->FindWindow(idbl[slot]), browseBtnW);
-    }
-
-    wxPanel *printer = wxDynamicCast(thenoteBook->GetPage(5), wxPanel);
-    if (printer)
-    {
-        right_anchor_page(printer, iw_img_path, iw_img_path_b, browseBtnW);
-        const int pw = printer->GetClientSize().GetWidth();
-        const int choiceX = pw - (int)(160 * HIDPISCALE);
-        if (dipsw1_123) dipsw1_123->SetPosition(wxPoint(choiceX, dipsw1_123->GetPosition().y));
-        if (dipsw1_67)  dipsw1_67->SetPosition(wxPoint(choiceX, dipsw1_67->GetPosition().y));
+        if (page->GetSizer()) page->GetSizer()->Layout();
+        update_page_scroll(page);
     }
 
     Layout();
@@ -716,13 +689,16 @@ void LisaConfigFrame::OnRevert(wxCommandEvent& WXUNUSED(event))
 
 
 
-wxPanel *LisaConfigFrame::CreateSlotConfigPage(wxNotebook *parent, int slot)
+wxScrolledWindow *LisaConfigFrame::CreateSlotConfigPage(wxNotebook *parent, int slot)
 {
-    int y=10* HIDPISCALE, ya=44* HIDPISCALE;
-
     if ( slot<1 || slot>3) return NULL;
 
-    wxPanel *panel = new wxPanel(parent);
+    wxScrolledWindow *panel = new wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL | wxTAB_TRAVERSAL);
+    panel->SetScrollRate(0, (int)wxMax(8, (int)(16 * HIDPISCALE)));
+  wxBoxSizer *root = new wxBoxSizer(wxVERTICAL);
+  const int border = (int)(10 * HIDPISCALE);
+  const int gap = (int)(8 * HIDPISCALE);
+  const int browseW = (int)(100 * HIDPISCALE);
 
     wxString u,l, cu, cl,s ;
 
@@ -734,69 +710,77 @@ wxPanel *LisaConfigFrame::CreateSlotConfigPage(wxNotebook *parent, int slot)
      }
 
     sloton[slot] = new wxRadioBox(panel, wxID_ANY,
-        wxT("slot:"), wxPoint( 10* HIDPISCALE,  y),  wxDefaultSize, 2, slotcard, 1, wxRA_SPECIFY_COLS,
-        wxDefaultValidator, wxT("radioBox"));                             y+=ya;
-                                                                          y+=ya;
+        wxT("slot:"), wxDefaultPosition,  wxDefaultSize, 2, slotcard, 1, wxRA_SPECIFY_COLS,
+        wxDefaultValidator, wxT("radioBox"));
     if (s.IsSameAs(slotcard[0],false)) sloton[slot]->SetSelection(0); else sloton[slot]->SetSelection(1);
+      root->Add(sloton[slot], 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 
 
     //----- upper slot -------------------------------------------------------------------------------------------------
 
     pportboxh[slot] = new wxRadioBox(panel, wxID_ANY,
-        wxT("Upper Parallel Port: (Connector 2 in LOS)"), wxPoint( 10* HIDPISCALE,  y), wxDefaultSize, 3, pportopts, 0, wxRA_SPECIFY_COLS,
-        wxDefaultValidator, wxT("radioBox"));                             y+=ya;
+        wxT("Upper Parallel Port: (Connector 2 in LOS)"), wxDefaultPosition, wxDefaultSize, 3, pportopts, 0, wxRA_SPECIFY_COLS,
+        wxDefaultValidator, wxT("radioBox"));
+      root->Add(pportboxh[slot], 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 
     // default to nothing for these.
     if      (cu.IsSameAs(_T("PROFILE"),false))          pportboxh[slot]->SetSelection(0);
     else if (cu.IsSameAs(_T("ADMP"),false))             pportboxh[slot]->SetSelection(1);
     else                                                pportboxh[slot]->SetSelection(2);
 
-    m_text_propathh[slot] = new wxTextCtrl(panel, idth[slot], u, wxPoint( 10,  y), wxSize( 400 * HIDPISCALE, 30 * HIDPISCALE), 0 );
-    (void) new wxButton( panel, idbh[slot], wxT("browse"),  wxPoint( 420* HIDPISCALE,  y), wxDefaultSize);
-
-                                                                          y+=ya;
-                                                                          y+=ya;
+      wxBoxSizer *upperPath = new wxBoxSizer(wxHORIZONTAL);
+      m_text_propathh[slot] = new wxTextCtrl(panel, idth[slot], u);
+      upperPath->Add(m_text_propathh[slot], 1, wxRIGHT, gap);
+      upperPath->Add(new wxButton(panel, idbh[slot], wxT("browse"), wxDefaultPosition, wxSize(browseW, -1)), 0);
+      root->Add(upperPath, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 
     //----- lower slot --------------------------------------------------------------------------------------------------
 
     pportboxl[slot] = new wxRadioBox(panel, wxID_ANY,
-        wxT("Lower Parallel Port: (Connector 1 in LOS)"), wxPoint(10,y), wxDefaultSize, 3, pportopts, 0, wxRA_SPECIFY_COLS,
-        wxDefaultValidator, wxT("radioBox"));                             y+=ya;
+        wxT("Lower Parallel Port: (Connector 1 in LOS)"), wxDefaultPosition, wxDefaultSize, 3, pportopts, 0, wxRA_SPECIFY_COLS,
+        wxDefaultValidator, wxT("radioBox"));
+      root->Add(pportboxl[slot], 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 
     // default to nothing for these.
     if      (cl.IsSameAs(_T("PROFILE"),false))          pportboxl[slot]->SetSelection(0);
     else if (cl.IsSameAs(_T("ADMP"),false))             pportboxl[slot]->SetSelection(1);
     else                                                pportboxl[slot]->SetSelection(2);
-    // 20200320 bug?                         was  wxID_ANY v
-    m_text_propathl[slot] = new wxTextCtrl(panel, idtl[slot], l, wxPoint( 10 * HIDPISCALE,  y), wxSize( 400 * HIDPISCALE, 30 * HIDPISCALE ), 0 );
-    (void) new wxButton( panel, idbl[slot], wxT("browse"),     wxPoint(420 * HIDPISCALE , y), wxDefaultSize);
 
-    // idth - upper text field idbh - button upper
-    // using wxID_ANY for lower for some reason(why?), idbl - button lower line ~493
+      wxBoxSizer *lowerPath = new wxBoxSizer(wxHORIZONTAL);
+      m_text_propathl[slot] = new wxTextCtrl(panel, idtl[slot], l);
+      lowerPath->Add(m_text_propathl[slot], 1, wxRIGHT, gap);
+      lowerPath->Add(new wxButton(panel, idbl[slot], wxT("browse"), wxDefaultPosition, wxSize(browseW, -1)), 0);
+      root->Add(lowerPath, 0, wxEXPAND | wxALL, border);
+
+      panel->SetSizer(root);
 
 
     return panel;
 }
 
 
-wxPanel *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
+wxScrolledWindow *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
 {
-   wxPanel *panel = new wxPanel(parent);
-
-   int y=10* HIDPISCALE,  ya=44* HIDPISCALE;
+    wxScrolledWindow *panel = new wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL | wxTAB_TRAVERSAL);
+    panel->SetScrollRate(0, (int)wxMax(8, (int)(16 * HIDPISCALE)));
+  wxBoxSizer *root = new wxBoxSizer(wxVERTICAL);
+  const int border = (int)(10 * HIDPISCALE);
+  const int gap = (int)(8 * HIDPISCALE);
+  const int browseW = (int)(100 * HIDPISCALE);
 
    // Tell the user what config file we're using.
    wxString t;
    t=_T("Prefs file: ") + get_config_filename();
 
-   (void)new wxStaticText(panel,wxID_ANY,   t,      wxPoint( 10* HIDPISCALE,  y+4), wxSize(300* HIDPISCALE, 30* HIDPISCALE));
-   (void)new wxButton(panel, ID_PREFS_OPEN,   wxT("Open..."),    wxPoint(320*HIDPISCALE, y), wxDefaultSize);
-   (void)new wxButton(panel, ID_PREFS_SAVEAS, wxT("Save As..."), wxPoint(410*HIDPISCALE, y), wxDefaultSize);
-   y+=ya/2; //y+=ya/2;
+  wxBoxSizer *prefsRow = new wxBoxSizer(wxHORIZONTAL);
+  prefsRow->Add(new wxStaticText(panel, wxID_ANY, t), 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap);
+  prefsRow->Add(new wxButton(panel, ID_PREFS_OPEN, wxT("Open...")), 0, wxRIGHT, gap);
+  prefsRow->Add(new wxButton(panel, ID_PREFS_SAVEAS, wxT("Save As...")), 0);
+  root->Add(prefsRow, 0, wxEXPAND | wxALL, border);
 
     wxString ramsize[] = { wxT("0.5 MB"), wxT("1 MB"), wxT("1.5 MB"),  wxT("2 MB*") };
 
-    cpurambox = new wxRadioBox(panel, wxID_ANY,wxT("RAM:"), wxPoint(10 * HIDPISCALE,y), wxDefaultSize, 
+  cpurambox = new wxRadioBox(panel, wxID_ANY,wxT("RAM:"), wxDefaultPosition, wxDefaultSize, 
     #ifdef ALLOW2MBRAM
           4, // 3 to turn off 2mb// 4 - to -reneable 2MB, uncomment case 2048 below as well
     #else
@@ -804,6 +788,7 @@ wxPanel *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
     #endif
        ramsize, 0, wxRA_SPECIFY_COLS,
        wxDefaultValidator, wxT("radioBox"));
+    root->Add(cpurambox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 
 
     switch(my_lisaconfig->mymaxlisaram)
@@ -821,27 +806,31 @@ wxPanel *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
    //macwx4mb = new wxCheckBox(panel, wxID_ANY, wxT("4MB RAM MacWorks"), wxPoint(320 * HIDPISCALE,y+(ya/4)), wxDefaultSize,wxCHK_2STATE);
    //macwx4mb->SetValue( (bool)(macworks4mb) );
 
-   y+=ya; y+=ya/2;
+    wxFlexGridSizer *fieldGrid = new wxFlexGridSizer(3, 3, gap, gap);
+    fieldGrid->AddGrowableCol(1, 1);
 
-   (void)new wxStaticText(panel, wxID_ANY, _T("Lisa Serial Number:"),      wxPoint( 10* HIDPISCALE,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE));    y+=(ya/2);
+    fieldGrid->Add(new wxStaticText(panel, wxID_ANY, _T("Lisa Serial Number:")), 0, wxALIGN_CENTER_VERTICAL);
+    serialtxt = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->myserial);
+    fieldGrid->Add(serialtxt, 1, wxEXPAND);
+    fieldGrid->Add(new wxButton(panel, ID_SERNO_INFO, wxT("info"), wxDefaultPosition, wxSize(browseW, -1)), 0);
 
-   (void) new wxButton( panel, ID_SERNO_INFO,  wxT("info"),  wxPoint(420 * HIDPISCALE,  y), wxDefaultSize );
+    fieldGrid->Add(new wxStaticText(panel, wxID_ANY, _T("Lisa ROM:")), 0, wxALIGN_CENTER_VERTICAL);
+    m_rompath = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->rompath);
+    fieldGrid->Add(m_rompath, 1, wxEXPAND);
+    b_rompath = new wxButton(panel, ID_PICK_ROM, wxT("browse"), wxDefaultPosition, wxSize(browseW, -1));
+    fieldGrid->Add(b_rompath, 0);
 
-    serialtxt = new wxTextCtrl(panel, wxID_ANY,  my_lisaconfig->myserial,  wxPoint( 10* HIDPISCALE,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE), 0); y+=ya;
+    fieldGrid->Add(new wxStaticText(panel, wxID_ANY, _T("Dual Parallel Card ROM:")), 0, wxALIGN_CENTER_VERTICAL);
+    m_dprompath = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->dualrom);
+    fieldGrid->Add(m_dprompath, 1, wxEXPAND);
+    b_dprompath = new wxButton(panel, ID_PICK_DPROM, wxT("browse"), wxDefaultPosition, wxSize(browseW, -1));
+    fieldGrid->Add(b_dprompath, 0);
 
-
-   (void)new wxStaticText(panel, wxID_ANY, _T("Lisa ROM:"),                wxPoint( 10* HIDPISCALE,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE));    y+=(ya/2);
-    m_rompath = new wxTextCtrl(panel, wxID_ANY,  my_lisaconfig->rompath,   wxPoint( 10* HIDPISCALE,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE),0);
-    b_rompath = new wxButton( panel, ID_PICK_ROM, wxT("browse"),           wxPoint(420* HIDPISCALE,  y), wxDefaultSize );     y+=ya;
-
-
-   (void)new wxStaticText(panel, wxID_ANY, _T("Dual Parallel Card ROM:"),  wxPoint( 10,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE));    y+=(ya/2);
-    m_dprompath = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->dualrom,  wxPoint( 10,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE),0);
-    b_dprompath = new wxButton( panel, ID_PICK_DPROM, wxT("browse"),       wxPoint(420,  y), wxDefaultSize );     y+=ya;
+    root->Add(fieldGrid, 0, wxEXPAND | wxALL, border);
 
 
     wxString kbid[] = { wxT("US"), wxT("UK"), wxT("FR"), wxT("DE")};
-    kbbox = new wxRadioBox(panel, wxID_ANY, wxT("Keyboard:"), wxPoint(10, y), wxDefaultSize, 4, kbid, 0, wxRA_SPECIFY_COLS,
+    kbbox = new wxRadioBox(panel, wxID_ANY, wxT("Keyboard:"), wxDefaultPosition, wxDefaultSize, 4, kbid, 0, wxRA_SPECIFY_COLS,
                            wxDefaultValidator, wxT("radioBox"));  // y+=ya+ya/2;
     switch(my_lisaconfig->kbid)
     {
@@ -852,9 +841,9 @@ wxPanel *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
      default:       kbbox->SetSelection(0);
     }
 
-    wxString iorom[] = { wxT("A8"), wxT("88"), wxT("89"), wxT("A9"), wxT("40") };
-    iorombox = new wxRadioBox(panel, wxID_ANY,wxT("I/O ROM:"), wxPoint(320 * HIDPISCALE,y), wxDefaultSize, 5, iorom, 0, wxRA_SPECIFY_COLS,
-       wxDefaultValidator, wxT("radioBox"));  y+=ya+(ya>>1);
+     wxString iorom[] = { wxT("A8"), wxT("88"), wxT("89"), wxT("A9"), wxT("40") };
+     iorombox = new wxRadioBox(panel, wxID_ANY,wxT("I/O ROM:"), wxDefaultPosition, wxDefaultSize, 5, iorom, 0, wxRA_SPECIFY_COLS,
+       wxDefaultValidator, wxT("radioBox"));
     switch(my_lisaconfig->iorom)
     {
      case 0x88 : iorombox->SetSelection(1); break;
@@ -865,121 +854,147 @@ wxPanel *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
      default:    iorombox->SetSelection(0);
     }
 
-    doublesided = new wxCheckBox(panel, wxID_ANY, wxT("SunRem 2x Sided Sony"), wxPoint(320 * HIDPISCALE,y-(ya/2)    ), wxDefaultSize,wxCHK_2STATE);
-    doublesided->SetValue( (bool)(double_sided_floppy) );  // y+=ya/2;
+    wxBoxSizer *radioRow = new wxBoxSizer(wxHORIZONTAL);
+    radioRow->Add(kbbox, 1, wxRIGHT, gap);
+    radioRow->Add(iorombox, 1);
+    root->Add(radioRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 
-    soundeffects = new wxCheckBox(panel, wxID_ANY, wxT("Sound Effects"), wxPoint(10 * HIDPISCALE,y), wxDefaultSize,wxCHK_2STATE);
-    soundeffects->SetValue( (bool)(sound_effects_on) );  y+=ya/2;
-    int yz=y;
+    doublesided = new wxCheckBox(panel, wxID_ANY, wxT("SunRem 2x Sided Sony"));
+    doublesided->SetValue((bool)(double_sided_floppy));
+    soundeffects = new wxCheckBox(panel, wxID_ANY, wxT("Sound Effects"));
+    soundeffects->SetValue((bool)(sound_effects_on));
+    skinson = new wxCheckBox(panel, wxID_ANY, wxT("Lisa Skins"));
+    skinson->SetValue((bool)(skins_on_next_run));
+    cheats = new wxCheckBox(panel, wxID_ANY, wxT("Boot ROM speedup hacks"));
+    cheats->SetValue((bool)(cheat_ram_test));
+    hle_cheats  = new wxCheckBox(panel, wxID_ANY, wxT("Hard Drive Acceleration"));
+    hle_cheats->SetValue((bool)(hle));
+    console_term = new wxCheckBox(panel, wxID_ANY, wxT("Console Terminal"));
+    console_term->SetValue((bool)consoletermwindow);
 
-    skinson = new wxCheckBox(panel, wxID_ANY, wxT("Lisa Skins"), wxPoint(10 * HIDPISCALE,y), wxDefaultSize,wxCHK_2STATE);
-    skinson->SetValue( (bool)(skins_on_next_run) );  y+=ya/2;
+    wxBoxSizer *checks = new wxBoxSizer(wxVERTICAL);
+    checks->Add(doublesided, 0, wxBOTTOM, (int)(4 * HIDPISCALE));
+    checks->Add(soundeffects, 0, wxBOTTOM, (int)(4 * HIDPISCALE));
+    checks->Add(skinson, 0, wxBOTTOM, (int)(4 * HIDPISCALE));
+    checks->Add(cheats, 0, wxBOTTOM, (int)(4 * HIDPISCALE));
+    checks->Add(hle_cheats, 0, wxBOTTOM, (int)(4 * HIDPISCALE));
+    checks->Add(console_term, 0);
+    root->Add(checks, 0, wxLEFT | wxRIGHT | wxTOP, border);
 
-    cheats = new wxCheckBox(panel, wxID_ANY, wxT("Boot ROM speedup hacks"), wxPoint(10 * HIDPISCALE,y), wxDefaultSize,wxCHK_2STATE);
-    cheats->SetValue( (bool)(cheat_ram_test) );
+    wxBoxSizer *pramRow = new wxBoxSizer(wxHORIZONTAL);
+    pramRow->Add(new wxStaticText(panel, wxID_ANY, _T("PRAM:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap);
+    pramRow->Add(new wxButton(panel, ID_SAVE_PRAM, wxT("Save")), 0, wxRIGHT, gap);
+    pramRow->Add(new wxButton(panel, ID_LOAD_PRAM, wxT("Load")), 0, wxRIGHT, gap);
+    pramRow->Add(new wxButton(panel, ID_ZAP_PRAM, wxT("Zap")), 0);
+    root->Add(pramRow, 0, wxALIGN_RIGHT | wxALL, border);
 
-    hle_cheats  = new wxCheckBox(panel, wxID_ANY, wxT("Hard Drive Acceleration"), wxPoint(10 * HIDPISCALE,y+ya/2), wxDefaultSize,wxCHK_2STATE);
-    hle_cheats->SetValue( (bool)(hle) );   y+=ya/2;
-
-    console_term = new wxCheckBox(panel, wxID_ANY, wxT("Console Terminal"), wxPoint(10 * HIDPISCALE,y+ya/2), wxDefaultSize,wxCHK_2STATE);
-    console_term->SetValue( (bool) consoletermwindow );
-
-    (void)new wxStaticText(panel, wxID_ANY,  _T("PRAM:"),  wxPoint(320 * HIDPISCALE, (yz)-ya/2), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE));
-    (void) new wxButton( panel, ID_SAVE_PRAM, wxT("Save"), wxPoint(320 * HIDPISCALE,  yz), wxDefaultSize );
-    (void) new wxButton( panel, ID_LOAD_PRAM, wxT("Load"), wxPoint(400 * HIDPISCALE,  yz), wxDefaultSize );
-    (void) new wxButton( panel, ID_ZAP_PRAM,  wxT("Zap"),  wxPoint(480 * HIDPISCALE,  yz), wxDefaultSize );
+    panel->SetSizer(root);
 
     return panel;
 }
 
 
-wxPanel *LisaConfigFrame::CreatePortsConfigPage(wxNotebook *parent)
+wxScrolledWindow *LisaConfigFrame::CreatePortsConfigPage(wxNotebook *parent)
 {
-    wxPanel *panel = new wxPanel(parent);
-    //wxPanel *panel = new wxPanel(parent,wxID_ANY,wxDefaultPosition,wxSize(320,200),wxT("ports"));
-    int y=10 * HIDPISCALE, ya=35 * HIDPISCALE;
+    wxScrolledWindow *panel = new wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL | wxTAB_TRAVERSAL);
+    panel->SetScrollRate(0, (int)wxMax(8, (int)(16 * HIDPISCALE)));
+  wxBoxSizer *root = new wxBoxSizer(wxVERTICAL);
+  const int border = (int)(10 * HIDPISCALE);
+  const int gap = (int)(8 * HIDPISCALE);
+  const int browseW = (int)(100 * HIDPISCALE);
     int i;
 
-
-   (void)new wxStaticText(panel, wxID_ANY, _T("Serial A:"),  wxPoint( 10,  y+10), wxSize(100 * HIDPISCALE, 30 * HIDPISCALE));
+  wxBoxSizer *serialARow = new wxBoxSizer(wxHORIZONTAL);
+  serialARow->Add(new wxStaticText(panel, wxID_ANY, _T("Serial A:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap);
 
 #ifndef ALLOWSERIALA
-    serialabox = new wxChoice(panel, wxID_ANY, wxPoint(100 * HIDPISCALE, y), wxDefaultSize, 1 /* serialopts */, nothingonly); y+=ya;
+  serialabox = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, 1 /* serialopts */, nothingonly);
     serialabox->SetSelection(0);
 #else
-    serialabox = new wxChoice(panel, wxID_ANY, wxPoint(100 * HIDPISCALE, y), wxDefaultSize, serialopts, serportopts); y+=ya+ya;
+  serialabox = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, serialopts, serportopts);
      for (i=0; i<serialopts; i++)
          if (my_lisaconfig->serial1_setting.IsSameAs(serportopts[i],false) ) serialabox->SetSelection(i);
 #endif
+  serialARow->Add(serialabox, 1);
+  root->Add(serialARow, 0, wxEXPAND | wxALL, border);
 
-    //y+=ya/8;
-    serialaparam = new wxTextCtrl(panel, wxID_ANY,  my_lisaconfig->serial1_param  ,
-                         wxPoint(10 * HIDPISCALE, y), wxSize(380 * HIDPISCALE,30 * HIDPISCALE) , 0);
+  wxBoxSizer *serialAParamRow = new wxBoxSizer(wxHORIZONTAL);
+  serialaparam = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->serial1_param);
+  serialAParamRow->Add(serialaparam, 1, wxRIGHT, gap);
+  serialaxon = new wxCheckBox(panel,wxID_ANY,  wxT("Xon/off"));
+  serialaxon->SetValue((bool) (my_lisaconfig->serial1xon.IsSameAs(_T("1"), false)) );
+  serialAParamRow->Add(serialaxon, 0, wxALIGN_CENTER_VERTICAL);
+  root->Add(serialAParamRow, 0, wxEXPAND | wxLEFT | wxRIGHT, border);
 
-    serialaxon = new wxCheckBox(panel,wxID_ANY,  wxT("Xon/off"),
-                        wxPoint(430 * HIDPISCALE, y-(HIDPISCALE*8)), wxSize(300 * HIDPISCALE,50 * HIDPISCALE) , 0);
-    serialaxon->SetValue((bool) (my_lisaconfig->serial1xon.IsSameAs(_T("1"), false)) );            y+=ya*2;
-
-
-   (void)new wxStaticText(panel, wxID_ANY, _T("Serial B:"),  wxPoint( 10,  y+10), wxSize(100 * HIDPISCALE, 30 * HIDPISCALE));
-    serialbbox = new wxChoice(panel, wxID_ANY, wxPoint(100 * HIDPISCALE, y), wxDefaultSize, serialopts, serportopts); y+=ya;  //wxSize(380 * HIDPISCALE,128 * HIDPISCALE)
+  wxBoxSizer *serialBRow = new wxBoxSizer(wxHORIZONTAL);
+  serialBRow->Add(new wxStaticText(panel, wxID_ANY, _T("Serial B:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap);
+  serialbbox = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, serialopts, serportopts);
+  serialBRow->Add(serialbbox, 1);
+  root->Add(serialBRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 //    serialbbox = new wxRadioBox(panel, wxID_ANY,
 //        wxT("Serial B:"), wxPoint(10 * HIDPISCALE, y), wxSize(380 * HIDPISCALE,128 * HIDPISCALE), serialopts, serportopts, 2, wxRA_SPECIFY_COLS,
 //        wxDefaultValidator, wxT("radioBox"));                                                       y+=ya+ya;
 
-   // y+=ya/8;
-    serialbparam = new wxTextCtrl(panel, wxID_ANY,  my_lisaconfig->serial2_param  , wxPoint(10, y), wxSize(380 * HIDPISCALE,30 * HIDPISCALE) , 0);
-
-    serialbxon = new wxCheckBox(panel,wxID_ANY, wxT("Xon/Off"),
-                        wxPoint(430 * HIDPISCALE, y-(HIDPISCALE*12)), wxDefaultSize,  0); // wxSize(300 * HIDPISCALE, 60 * HIDPISCALE) 
-    serialbxon->SetValue((bool) (my_lisaconfig->serial2xon.IsSameAs(_T("1"), false)));             
+  wxBoxSizer *serialBParamRow = new wxBoxSizer(wxHORIZONTAL);
+  serialbparam = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->serial2_param);
+  serialBParamRow->Add(serialbparam, 1, wxRIGHT, gap);
+  serialbxon = new wxCheckBox(panel,wxID_ANY, wxT("Xon/Off"));
+  serialbxon->SetValue((bool) (my_lisaconfig->serial2xon.IsSameAs(_T("1"), false)));
+  serialBParamRow->Add(serialbxon, 0, wxALIGN_CENTER_VERTICAL);
+  root->Add(serialBParamRow, 0, wxEXPAND | wxLEFT | wxRIGHT, border);
 
     for (i=0; i<serialopts; i++)
         if (my_lisaconfig->serial2_setting.IsSameAs(serportopts[i],false) ) serialbbox->SetSelection(i);
-    
-    y+=ya*2;
-    (void)new wxStaticText(panel, wxID_ANY,
-                           _T("Note: Parallel/ProFile storage changes require Lisa powered off."),
-                           wxPoint(10 * HIDPISCALE, y), wxSize(520 * HIDPISCALE, 30 * HIDPISCALE));
-    y+=ya;
+
+  root->Add(new wxStaticText(panel, wxID_ANY,
+               _T("Note: Parallel/ProFile storage changes require Lisa powered off.")),
+        0, wxEXPAND | wxALL, border);
 
     if (floppy_iorom!=0x88)
     {
         pportbox = new wxRadioBox(panel, wxID_ANY,
-            wxT("Parallel Port:"), wxPoint(10, y), wxDefaultSize, 3, pportopts, 0, wxRA_SPECIFY_COLS,
+      wxT("Parallel Port:"), wxDefaultPosition, wxDefaultSize, 3, pportopts, 0, wxRA_SPECIFY_COLS,
             wxDefaultValidator, wxT("radioBox"));                             
             my_lisaconfig->parallelp.Replace(_T("widget"),_T("profile"),true);
     }
     else
     {
         pportbox = new wxRadioBox(panel, wxID_ANY,
-            wxT("Parallel Port:"), wxPoint(10, y), wxDefaultSize, 1, wpportopts, 0, wxRA_SPECIFY_COLS,
+      wxT("Parallel Port:"), wxDefaultPosition, wxDefaultSize, 1, wpportopts, 0, wxRA_SPECIFY_COLS,
             wxDefaultValidator, wxT("radioBox"));                             
             my_lisaconfig->parallelp.Replace(_T("profile"),_T("widget"),true);
     }
-    y+=ya*2;
+  root->Add(pportbox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, border);
 
     // default to profile for builtin parallel port
     if      (my_lisaconfig->parallel.IsSameAs(_T("Nothing"),false)) pportbox->SetSelection(2);
     else if (my_lisaconfig->parallel.IsSameAs(_T("ADMP"),false))    pportbox->SetSelection(1);
     else                                                            pportbox->SetSelection(0);
-    
-    m_propath = new wxTextCtrl(panel, wxID_ANY,  my_lisaconfig->parallelp  ,
-                               wxPoint(10 * HIDPISCALE, y), wxSize(380 * HIDPISCALE, 30 * HIDPISCALE) , 0);
-    b_propath = new wxButton  (panel, ID_PICK_PROFILE, wxT("browse"),  wxPoint(420 * HIDPISCALE, y), wxDefaultSize );
+
+  wxBoxSizer *profilePathRow = new wxBoxSizer(wxHORIZONTAL);
+  m_propath = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->parallelp);
+  profilePathRow->Add(m_propath, 1, wxRIGHT, gap);
+  b_propath = new wxButton(panel, ID_PICK_PROFILE, wxT("browse"), wxDefaultPosition, wxSize(browseW, -1));
+  profilePathRow->Add(b_propath, 0);
+  root->Add(profilePathRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, border);
+
+  panel->SetSizer(root);
 
 
     return panel;
 }
 
 
-wxPanel *LisaConfigFrame::CreatePrinterConfigPage(wxNotebook *parent)
+wxScrolledWindow *LisaConfigFrame::CreatePrinterConfigPage(wxNotebook *parent)
 {
-    wxPanel *panel = new wxPanel(parent);
-    int y=10, ya=40;
+    wxScrolledWindow *panel = new wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL | wxTAB_TRAVERSAL);
+    panel->SetScrollRate(0, (int)wxMax(8, (int)(16 * HIDPISCALE)));
+  wxBoxSizer *root = new wxBoxSizer(wxVERTICAL);
+  const int border = (int)(10 * HIDPISCALE);
+  const int gap = (int)(8 * HIDPISCALE);
+  const int browseW = (int)(100 * HIDPISCALE);
 
-    (void)new wxStaticText(panel, wxID_ANY, _T("ImageWriter/ADMP DIP Switch 1:"),      
-                   wxPoint( 10 * HIDPISCALE,  y), wxSize(400 * HIDPISCALE, 30 * HIDPISCALE));    y+=(ya/2);
+  root->Add(new wxStaticText(panel, wxID_ANY, _T("ImageWriter/ADMP DIP Switch 1:")), 0, wxLEFT | wxRIGHT | wxTOP, border);
 
     wxString fontopt[]={  wxT("000 American"),      //    ESC Z,^G,^@
                           wxT("001 German"),        //    ESC Z,^C,^@,ESC D,^D,^@
@@ -990,10 +1005,12 @@ wxPanel *LisaConfigFrame::CreatePrinterConfigPage(wxNotebook *parent)
                           wxT("110 British"),       //    ESC Z,^D,^@,ESC D,^C,^@
                           wxT("111 Spanish") };     //    ESC D,^G,^@
 
-    (void)new wxStaticText(panel, wxID_ANY, _T("pins123: Font"),                       
-                 wxPoint( 10 * HIDPISCALE,  y), wxSize(300 * HIDPISCALE, 30 * HIDPISCALE));
-    dipsw1_123 = new wxChoice(panel, wxID_ANY,  wxPoint(380 * HIDPISCALE, y), wxDefaultSize, 8, fontopt);  y+=ya; y+=ya/2;
+    wxBoxSizer *pins123Row = new wxBoxSizer(wxHORIZONTAL);
+    pins123Row->Add(new wxStaticText(panel, wxID_ANY, _T("pins123: Font")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap);
+    dipsw1_123 = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, 8, fontopt);
+    pins123Row->Add(dipsw1_123, 1);
     dipsw1_123->SetSelection(my_lisaconfig->iw_dipsw_1 & 7);
+    root->Add(pins123Row, 0, wxEXPAND | wxALL, border);
 
 
        // bit 4-    72 lines (on) 66 lines (off)
@@ -1001,37 +1018,47 @@ wxPanel *LisaConfigFrame::CreatePrinterConfigPage(wxNotebook *parent)
 
     wxString bit4opt[]={ wxT("off - 66 lines"), wxT("on - 72 lines") };
     dipsw1_4 = new wxRadioBox(panel, wxID_ANY,
-        wxT("pin4: lines"), wxPoint(10 * HIDPISCALE, y), wxDefaultSize, 2, bit4opt, 0, wxRA_SPECIFY_COLS,
-        wxDefaultValidator, wxT("radioBox"));                             y+=ya; y+=ya/2;
+      wxT("pin4: lines"), wxDefaultPosition, wxDefaultSize, 2, bit4opt, 0, wxRA_SPECIFY_COLS,
+      wxDefaultValidator, wxT("radioBox"));
     dipsw1_4->SetSelection( !!(my_lisaconfig->iw_dipsw_1 & 8) );
+    root->Add(dipsw1_4, 0, wxEXPAND | wxLEFT | wxRIGHT, border);
 
 
     wxString bit5opt[]={ wxT("off - 8 bit"), wxT("on - 7 bit data") };
     dipsw1_5 = new wxRadioBox(panel, wxID_ANY,
-        wxT("pin5: bits"), wxPoint(10 * HIDPISCALE, y), wxDefaultSize, 2, bit5opt, 0, wxRA_SPECIFY_COLS,
-        wxDefaultValidator, wxT("radioBox"));                             y+=ya; y+=ya/2;
+      wxT("pin5: bits"), wxDefaultPosition, wxDefaultSize, 2, bit5opt, 0, wxRA_SPECIFY_COLS,
+      wxDefaultValidator, wxT("radioBox"));
     dipsw1_5->SetSelection( !!(my_lisaconfig->iw_dipsw_1 & 16) );
+    root->Add(dipsw1_5, 0, wxEXPAND | wxLEFT | wxRIGHT, border);
 
     wxString bit67opt[]={ wxT("00 Elite Prop."),
                           wxT("01 Elite 12cpi"),
                           wxT("10 Ultracondensed 17cpi"),
                           wxT("11 Pica 10cpi")              };
 
-    (void)new wxStaticText(panel, wxID_ANY, _T("pins67: Pitch"),                       
-                   wxPoint( 10 * HIDPISCALE,  y), wxSize(300 * HIDPISCALE, 30 * HIDPISCALE));
-    dipsw1_67 = new wxChoice(panel, wxID_ANY, wxPoint(420, y), wxDefaultSize, 4, bit67opt); y+=ya; y+=ya/2;
+    wxBoxSizer *pins67Row = new wxBoxSizer(wxHORIZONTAL);
+    pins67Row->Add(new wxStaticText(panel, wxID_ANY, _T("pins67: Pitch")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap);
+    dipsw1_67 = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, 4, bit67opt);
+    pins67Row->Add(dipsw1_67, 1);
     dipsw1_67->SetSelection( (my_lisaconfig->iw_dipsw_1>>5) & 3 );
+    root->Add(pins67Row, 0, wxEXPAND | wxALL, border);
 
-    dipsw1_8 = new wxCheckBox(panel, wxID_ANY, wxT("pin8: Auto LF after CR"), wxPoint(10 * HIDPISCALE,y), wxDefaultSize,wxCHK_2STATE);
-    dipsw1_8->SetValue((bool) !!(my_lisaconfig->iw_dipsw_1 & 128) );       y+=ya; y+=ya/2;
+    dipsw1_8 = new wxCheckBox(panel, wxID_ANY, wxT("pin8: Auto LF after CR"));
+    dipsw1_8->SetValue((bool) !!(my_lisaconfig->iw_dipsw_1 & 128) );
+    root->Add(dipsw1_8, 0, wxLEFT | wxRIGHT, border);
 
-    iw_img_box = new wxCheckBox(panel, wxID_ANY, wxT("Print to images"),   wxPoint(10 * HIDPISCALE,y), wxDefaultSize,wxCHK_2STATE);
-    iw_img_box->SetValue((bool)(!!my_lisaconfig->iw_png_on) );             y+=ya; y+=ya/2;
+    iw_img_box = new wxCheckBox(panel, wxID_ANY, wxT("Print to images"));
+    iw_img_box->SetValue((bool)(!!my_lisaconfig->iw_png_on) );
+    root->Add(iw_img_box, 0, wxLEFT | wxRIGHT, border);
 
-    iw_img_path = new wxTextCtrl(panel, wxID_ANY,  my_lisaconfig->iw_png_path , wxPoint(10 * HIDPISCALE, y), 
-                          wxSize(400 * HIDPISCALE, 30 * HIDPISCALE) , 0);
+    wxBoxSizer *imgPathRow = new wxBoxSizer(wxHORIZONTAL);
+    iw_img_path = new wxTextCtrl(panel, wxID_ANY, my_lisaconfig->iw_png_path);
+    imgPathRow->Add(iw_img_path, 1, wxRIGHT, gap);
+    iw_img_path_b = new wxButton(panel, ID_PICK_IWDIR, wxT("browse"), wxDefaultPosition, wxSize(browseW, -1));
+    imgPathRow->Add(iw_img_path_b, 0);
+    root->Add(imgPathRow, 0, wxEXPAND | wxALL, border);
 
-    iw_img_path_b = new wxButton  (panel, ID_PICK_IWDIR, wxT("browse"),  wxPoint(420 * HIDPISCALE, y), wxDefaultSize );
+    panel->SetSizer(root);
 
 
     return panel;
@@ -1040,12 +1067,12 @@ wxPanel *LisaConfigFrame::CreatePrinterConfigPage(wxNotebook *parent)
 
 void LisaConfigFrame::CreateNotebook(wxNotebook *parent)
 {
-  wxPanel  *panel1 = CreateMainConfigPage( parent );
-  wxPanel  *panel2 = CreatePortsConfigPage(parent );
-  wxPanel  *panel3 = CreateSlotConfigPage( parent,1);
-  wxPanel  *panel4 = CreateSlotConfigPage( parent,2);
-  wxPanel  *panel5 = CreateSlotConfigPage( parent,3);
-  wxPanel  *panel6 = CreatePrinterConfigPage(parent);
+    wxScrolledWindow *panel1 = CreateMainConfigPage( parent );
+    wxScrolledWindow *panel2 = CreatePortsConfigPage(parent );
+    wxScrolledWindow *panel3 = CreateSlotConfigPage( parent,1);
+    wxScrolledWindow *panel4 = CreateSlotConfigPage( parent,2);
+    wxScrolledWindow *panel5 = CreateSlotConfigPage( parent,3);
+    wxScrolledWindow *panel6 = CreatePrinterConfigPage(parent);
 
   parent->AddPage( panel1, wxT("General"),        false, -1);
   parent->AddPage( panel2, wxT("Ports & Storage"),false, -1);

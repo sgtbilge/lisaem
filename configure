@@ -16,7 +16,8 @@ do
  esac
 done
 
-echo "OPTS: $OPTS" /tmp/lisaem-opts.txt
+mkdir -p .tmp
+echo "OPTS: $OPTS" .tmp/lisaem-opts.txt
 
 cat >Makefile <<END
 # This is a fake Makefile.  For build environments

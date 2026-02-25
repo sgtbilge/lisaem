@@ -145,6 +145,10 @@
 #include <wx/toolbar.h>
 #include <terminalwx.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include <wx/filename.h>
+#include <string>
 
 
 // RAW_BITMAP_ACCESS should be used in most cases as it proves much higher performance
@@ -188,6 +192,15 @@ long emulation_time=25;
 #include <sys/param.h>
 #endif
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <poll.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <strings.h>
+
 #define DEPTH 32
 
 #ifndef MAXPATHLEN
@@ -217,6 +230,7 @@ extern "C" int ImageWriter_LisaEm_Init(int iwnum);
 extern "C" void iw_formfeed(int iw);
 extern "C" void ImageWriterLoop(int iw,uint8 c);
 extern "C" void iw_shutdown(void);
+extern "C" void lisa_powered_off(void);
 
 extern "C" void emulate (void);
 extern "C" void XLLisaRedrawPixels(void);          // proto to supress warning below
@@ -311,12 +325,32 @@ static int set_window_size_already=0;
 static int on_start_poweron=0,
            on_start_fullscreen=0,
            on_start_harddisk=0,
+           on_start_mcp_stdio=0,
            on_start_quit_on_poweroff=0,
            box_x=-1,box_y=-1, box_xh=-1, box_yh=-1; // used for screengrab
 static double on_start_zoom=0.0;
 
 wxString   on_start_lisaconfig="",
            on_start_floppy="";
+
+static wxString default_xenix_boot_floppy(void)
+{
+    const char *override=getenv("LISA_DEFAULT_BOOT_FLOPPY");
+    if (override && override[0])
+    {
+        wxString p=wxString::FromUTF8(override);
+        if (wxFileExists(p)) return p;
+    }
+
+    wxStandardPaths& stdp = wxStandardPaths::Get();
+    const wxChar sep = wxFileName::GetPathSeparator();
+    wxString base = stdp.GetUserDataDir() + sep + _T("FLOPPY_DISKS");
+    wxString p1 = base + sep + _T("Xenix 3.0") + sep + _T("Xenix 3.0 Boot.dc42");
+    wxString p2 = base + sep + _T("Xenix 3.0 Boot.dc42");
+    if (wxFileExists(p1)) return p1;
+    if (wxFileExists(p2)) return p2;
+    return wxEmptyString;
+}
 
 static int bootdbg_enabled_cached = -1;
 static unsigned int bootdbg_last_os = 0xffffffffu;
@@ -423,7 +457,7 @@ static int on_startup_actions_done=0;
 static const wxCmdLineEntryDesc cmdLineDesc[] =
 {
     { wxCMD_LINE_SWITCH, "h", "help",       "show this help message",                            wxCMD_LINE_VAL_NONE,  wxCMD_LINE_OPTION_HELP},
-    { wxCMD_LINE_SWITCH, "p", "power",      "power on as soon as LisaEm is launched",            wxCMD_LINE_VAL_NONE,  wxCMD_LINE_PARAM_OPTIONAL},
+    { wxCMD_LINE_SWITCH, "p", "power",      "power on after startup",                              wxCMD_LINE_VAL_NONE,  wxCMD_LINE_PARAM_OPTIONAL},
     { wxCMD_LINE_SWITCH, "q", "quit",       "quit after Lisa shuts down",                        wxCMD_LINE_VAL_NONE,  wxCMD_LINE_PARAM_OPTIONAL },
     { wxCMD_LINE_OPTION, "f", "floppy",     "boot from which floppy image ROMless only",         wxCMD_LINE_VAL_STRING,wxCMD_LINE_PARAM_OPTIONAL },
     { wxCMD_LINE_SWITCH, "d", "drive",      "boot from motherboard ProFile/Widget ROMless only", wxCMD_LINE_VAL_NONE,  wxCMD_LINE_PARAM_OPTIONAL },
@@ -436,6 +470,7 @@ static const wxCmdLineEntryDesc cmdLineDesc[] =
     { wxCMD_LINE_OPTION, "c", "config",     "Open which lisaem config file",                     wxCMD_LINE_VAL_STRING,wxCMD_LINE_PARAM_OPTIONAL },
 
     { wxCMD_LINE_SWITCH, "k", "kiosk",      "kiosk mode (suitable for RPi Lisa case)",           wxCMD_LINE_VAL_NONE,  wxCMD_LINE_PARAM_OPTIONAL },
+    { wxCMD_LINE_SWITCH, "",  "mcp-stdio",  "enable MCP server on stdin/stdout",                 wxCMD_LINE_VAL_NONE,  wxCMD_LINE_PARAM_OPTIONAL },
 
     { wxCMD_LINE_NONE,   ":",  "",          "",                                                  wxCMD_LINE_VAL_NONE,  wxCMD_LINE_PARAM_OPTIONAL }
 };
@@ -795,6 +830,1469 @@ static wxPanel   *g_fs_led_power   = NULL;
 static wxPanel   *g_fs_led_floppy  = NULL;
 static wxPanel   *g_fs_led_profile = NULL;
 static int        g_fullscreen_scale_in_progress=0;
+
+static const char *lisa_mcp_cmd_path=".tmp/lisaem-mcp-cmd.txt";
+static const char *lisa_mcp_state_path=".tmp/lisaem-mcp-state.txt";
+
+static int lisa_mcp_server_fd = -1;
+static int lisa_mcp_client_fd = -1;
+static unsigned char mcp_type_buf[4096];
+static int mcp_type_head = 0;
+static int mcp_type_tail = 0;
+static int mcp_type_delay = 0;
+
+static void lisa_mcp_init_server(void)
+{
+    lisa_mcp_server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lisa_mcp_server_fd < 0) return;
+
+    int opt = 1;
+    setsockopt(lisa_mcp_server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    fcntl(lisa_mcp_server_fd, F_SETFL, O_NONBLOCK);
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(1983);
+
+    if (bind(lisa_mcp_server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        close(lisa_mcp_server_fd);
+        lisa_mcp_server_fd = -1;
+        return;
+    }
+    listen(lisa_mcp_server_fd, 1);
+}
+
+static void lisa_mcp_stdio_init(void);
+static void lisa_mcp_stdio_poll(void);
+static void lisa_mcp_stdio_activate_from_cli(void);
+
+static void lisa_mcp_trim(char *s)
+{
+    if (!s) return;
+    size_t n=strlen(s);
+    while (n>0 && (s[n-1]=='\n' || s[n-1]=='\r')) s[--n]=0;
+}
+
+extern "C" uint8 *lisaram;
+extern "C" uint32 maxlisaram;
+
+static void lisa_mcp_write_state(const char *reason, const char *msg)
+{
+    (void)mkdir(".tmp",0777);
+    FILE *f=fopen(lisa_mcp_state_path,"wt");
+    if (!f) return;
+    fprintf(f,"reason=%s\n",reason ? reason : "unknown");
+    if (msg && msg[0]) fprintf(f,"message=%s\n",msg);
+    fprintf(f,"running=%d\n",my_lisaframe ? my_lisaframe->running : -1);
+    fprintf(f,"power=%d\n",(my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK)==POWER_ON)) ? 1 : 0);
+    fprintf(f,"pc=%08x\n",reg68k_pc);
+    fprintf(f,"clock=%016llx\n",(long long)cpu68k_clocks);
+    fprintf(f,"mouse=%d,%d\n",last_mouse_x,last_mouse_y);
+    fprintf(f,"commands=status|power|shutdown|quit|force-shutdown|pause|run|apple1|apple2|apple3|move x y|click x y|text <ascii>|keycode <hex|dec>|dump <addr> <len>|find <hex>|help\n");
+    fclose(f);
+}
+
+static void lisa_mcp_move_mouse(int x, int y)
+{
+    if (x < 0) x = 0; if (x >= lisa_vid_size_x) x = lisa_vid_size_x - 1;
+    if (y < 0) y = 0; if (y >= lisa_vid_size_y) y = lisa_vid_size_y - 1;
+    add_mouse_event((int16)x, (int16)y, 0);
+    seek_mouse_event();
+}
+
+static void lisa_mcp_click_mouse(int x, int y)
+{
+    if (x < 0) x = 0; if (x >= lisa_vid_size_x) x = lisa_vid_size_x - 1;
+    if (y < 0) y = 0; if (y >= lisa_vid_size_y) y = lisa_vid_size_y - 1;
+    add_mouse_event((int16)x, (int16)y, 0);
+    add_mouse_event((int16)x, (int16)y, 1);
+    add_mouse_event((int16)x, (int16)y, -1);
+    seek_mouse_event();
+}
+
+static int lisa_mcp_queue_char(unsigned char c)
+{
+    int next = (mcp_type_tail + 1) % (int)sizeof(mcp_type_buf);
+    if (next == mcp_type_head) return 0;
+    mcp_type_buf[mcp_type_tail] = c;
+    mcp_type_tail = next;
+    return 1;
+}
+
+static int lisa_mcp_queue_return(void)
+{
+    return lisa_mcp_queue_char('\r');
+}
+
+static int lisa_mcp_queue_text_bytes(const char *text, int append_return)
+{
+    if (!text) text="";
+    int count=0;
+    int has_return=0;
+    for (const char *p=text; *p; ++p)
+    {
+        unsigned char c=(unsigned char)*p;
+        if (c=='\n') c='\r';
+        if (c=='\r') has_return=1;
+        if (lisa_mcp_queue_char(c)) count++;
+    }
+    if (append_return && !has_return)
+    {
+        if (lisa_mcp_queue_return()) count++;
+    }
+    return count;
+}
+
+static void lisa_mcp_process_commands(void)
+{
+    char line[512];
+    char msg[256];
+    int got_command = 0;
+
+    // Process one character from the text queue every 10 calls (~200-400ms delay)
+    if (mcp_type_head != mcp_type_tail)
+    {
+        if (++mcp_type_delay >= 10)
+        {
+            mcp_type_delay = 0;
+            unsigned char c = mcp_type_buf[mcp_type_head];
+            mcp_type_head = (mcp_type_head + 1) % sizeof(mcp_type_buf);
+            fprintf(stderr, "MCP: typing char 0x%02x (%c)\n", c, (c>=32 && c<127) ? c : '.');
+            keystroke_cops(c);
+        }
+    }
+
+    // 1. Check for new socket connections
+    if (lisa_mcp_server_fd >= 0 && lisa_mcp_client_fd < 0)
+    {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        int fd = accept(lisa_mcp_server_fd, (struct sockaddr *)&client_addr, &client_len);
+        if (fd >= 0)
+        {
+            fcntl(fd, F_SETFL, O_NONBLOCK);
+            lisa_mcp_client_fd = fd;
+            fprintf(stderr, "MCP: client connected\n");
+        }
+    }
+
+    // 2. Check for socket commands
+    if (lisa_mcp_client_fd >= 0)
+    {
+        ssize_t n = recv(lisa_mcp_client_fd, line, sizeof(line)-1, 0);
+        if (n > 0)
+        {
+            line[n] = 0;
+            lisa_mcp_trim(line);
+            if (line[0]) {
+                got_command = 1;
+                fprintf(stderr, "MCP: socket cmd: [%s]\n", line);
+            }
+        }
+        else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
+        {
+            close(lisa_mcp_client_fd);
+            lisa_mcp_client_fd = -1;
+            fprintf(stderr, "MCP: client disconnected\n");
+        }
+    }
+
+    // 3. Check for file commands (legacy support)
+    if (!got_command)
+    {
+        FILE *f=fopen(lisa_mcp_cmd_path,"rt");
+        if (f)
+        {
+            if (fgets(line,sizeof(line),f))
+            {
+                lisa_mcp_trim(line);
+                if (line[0]) {
+                    got_command = 1;
+                    fprintf(stderr, "MCP: file cmd: [%s]\n", line);
+                }
+            }
+            fclose(f);
+            remove(lisa_mcp_cmd_path);
+        }
+    }
+
+    if (!got_command) return;
+
+    msg[0]=0;
+    while (got_command)
+    {
+        got_command = 0; // process one line at a time from this call
+
+        if (!strcmp(line,"status"))
+        {
+            snprintf(msg,sizeof(msg),"status");
+        }
+        else if (!strcmp(line,"help"))
+        {
+            snprintf(msg,sizeof(msg),"commands: status|power|shutdown|quit|force-shutdown|pause|run|focus|wait <n>|apple1|apple2|apple3|move x y|click x y|text <ascii>|return|keycode <hex|dec>|dump <addr> <len>|find <hex>|help");
+        }
+        else if (!strncmp(line,"wait ",5))
+        {
+            int n = atoi(line+5);
+            mcp_type_delay -= (n * 10); // roughly n*200ms extra wait
+            snprintf(msg,sizeof(msg),"waiting");
+        }
+        else if (!strcmp(line,"return"))
+        {
+            int next = (mcp_type_tail + 1) % sizeof(mcp_type_buf);
+            if (next != mcp_type_head) { mcp_type_buf[mcp_type_tail] = '\r'; mcp_type_tail = next; }
+            snprintf(msg,sizeof(msg),"queued return");
+        }
+        else if (!strcmp(line,"focus"))
+        {
+            if (my_lisawin) my_lisawin->SetFocus();
+            snprintf(msg,sizeof(msg),"focus set to lisawin");
+        }
+        else if (!strcmp(line,"power"))
+        {
+            handle_powerbutton();
+            snprintf(msg,sizeof(msg),"power toggled");
+        }
+        else if (!strcmp(line,"shutdown"))
+        {
+            if (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON))
+            {
+                handle_powerbutton(); // sends Lisa power key event for guest-managed shutdown
+                snprintf(msg,sizeof(msg),"shutdown requested");
+            }
+            else
+            {
+                snprintf(msg,sizeof(msg),"already powered off");
+            }
+        }
+        else if (!strcmp(line,"quit"))
+        {
+            if (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON))
+            {
+                on_start_quit_on_poweroff = 1; // match UI "Shut Down" behavior
+                handle_powerbutton();
+                snprintf(msg,sizeof(msg),"quit requested (graceful)");
+            }
+            else
+            {
+                wxCommandEvent foo;
+                if (my_lisaframe) my_lisaframe->OnQuit(foo);
+                snprintf(msg,sizeof(msg),"quit requested");
+            }
+        }
+        else if (!strcmp(line,"force-shutdown"))
+        {
+            if (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON))
+            {
+                profile_unmount();
+                lisa_powered_off();
+                snprintf(msg,sizeof(msg),"force shutdown executed");
+            }
+            else
+            {
+                snprintf(msg,sizeof(msg),"already powered off");
+            }
+        }
+        else if (!strcmp(line,"pause"))
+        {
+            pause_run();
+            snprintf(msg,sizeof(msg),"paused");
+        }
+        else if (!strcmp(line,"run"))
+        {
+            resume_run();
+            snprintf(msg,sizeof(msg),"running");
+        }
+        else if (!strcmp(line,"apple1"))
+        {
+            apple_1();
+            snprintf(msg,sizeof(msg),"apple1");
+        }
+        else if (!strcmp(line,"apple2"))
+        {
+            wxString xenix=default_xenix_boot_floppy();
+            if (my_lisaframe && my_lisawin &&
+                (my_lisawin->floppystate & FLOPPY_ANIM_MASK)==FLOPPY_EMPTY &&
+                !xenix.IsEmpty())
+            {
+                int i=0;
+                if (my_lisaframe->running)
+                {
+                    const wxCharBuffer s=CSTR(xenix);
+                    i=floppy_insert((char *)(const char *)s);
+                }
+                else
+                {
+                    my_lisaframe->floppy_to_insert=xenix;
+                }
+                if (!i && (my_lisawin->floppystate & FLOPPY_ANIM_MASK)==FLOPPY_EMPTY)
+                    my_lisawin->floppystate=FLOPPY_NEEDS_REDRAW|FLOPPY_ANIMATING|FLOPPY_INSERT_0;
+            }
+            // Explicit Apple(modifier)+2 key chord.
+            send_cops_keycode(KEYCODE_COMMAND|KEY_DOWN);
+            send_cops_keycode(KEYCODE_2|KEY_DOWN);
+            send_cops_keycode(KEYCODE_2|KEY_UP);
+            send_cops_keycode(KEYCODE_COMMAND|KEY_UP);
+            snprintf(msg,sizeof(msg),"apple2 (modifier chord)");
+        }
+        else if (!strcmp(line,"apple3"))
+        {
+            apple_3();
+            snprintf(msg,sizeof(msg),"apple3");
+        }
+        else if (!strncmp(line,"move ",5))
+        {
+            int x=0,y=0;
+            if (sscanf(line+5,"%d %d",&x,&y)==2)
+            {
+                lisa_mcp_move_mouse(x,y);
+                snprintf(msg,sizeof(msg),"moved to %d,%d",x,y);
+            }
+            else snprintf(msg,sizeof(msg),"bad move command");
+        }
+        else if (!strncmp(line,"click ",6))
+        {
+            int x=0,y=0;
+            if (sscanf(line+6,"%d %d",&x,&y)==2)
+            {
+                lisa_mcp_click_mouse(x,y);
+                snprintf(msg,sizeof(msg),"clicked at %d,%d",x,y);
+            }
+            else snprintf(msg,sizeof(msg),"bad click command");
+        }
+        else if (!strncmp(line,"text",4))
+        {
+            const char *p=line+4;
+            while (*p == ' ') p++; // skip all leading spaces
+            if (!*p)
+            {
+                int next = (mcp_type_tail + 1) % sizeof(mcp_type_buf);
+                if (next != mcp_type_head) { mcp_type_buf[mcp_type_tail] = '\r'; mcp_type_tail = next; }
+                snprintf(msg,sizeof(msg),"queued return");
+            }
+            else {
+                int count = 0;
+                int has_return = 0;
+                while (*p) {
+                    unsigned char c = (unsigned char)*p;
+                    if (c=='\n') c='\r';
+                    if (c=='\r') has_return = 1;
+                    int next = (mcp_type_tail + 1) % sizeof(mcp_type_buf);
+                    if (next != mcp_type_head) { mcp_type_buf[mcp_type_tail] = c; mcp_type_tail = next; count++; }
+                    p++;
+                }
+                if (!has_return) {
+                    int next = (mcp_type_tail + 1) % sizeof(mcp_type_buf);
+                    if (next != mcp_type_head) { mcp_type_buf[mcp_type_tail] = '\r'; mcp_type_tail = next; count++; }
+                }
+                fprintf(stderr, "MCP: queued %d chars for text\n", count);
+                snprintf(msg,sizeof(msg),"queued %d chars", count);
+            }
+        }
+        else if (!strncmp(line,"keycode ",8))
+        {
+            if (!strncmp(line+8,"raw ",4))
+            {
+                unsigned int k=0, state=0;
+                if (sscanf(line+12,"%x %x",&k,&state)==2)
+                {
+                    send_cops_keycode(((int)k & 0x7f) | ((int)state & 0x80));
+                    snprintf(msg,sizeof(msg),"keycode raw 0x%02x state 0x%02x",k,state);
+                }
+                else snprintf(msg,sizeof(msg),"bad keycode raw (use hex k state)");
+            }
+            else
+            {
+                char *endp=NULL;
+                long k=strtol(line+8,&endp,0);
+                if (endp && *endp==0 && k>=0 && k<=255)
+                {
+                    send_cops_keycode(((int)k & 0x7f) | KEY_DOWN);
+                    send_cops_keycode(((int)k & 0x7f) | KEY_UP);
+                    snprintf(msg,sizeof(msg),"keycode %ld",k);
+                }
+                else snprintf(msg,sizeof(msg),"bad keycode");
+            }
+        }
+        else if (!strncmp(line,"dump ",5))
+        {
+            uint32 addr=0, len=0;
+            if (sscanf(line+5,"%x %x",&addr,&len)==2)
+            {
+                if (lisaram && addr < maxlisaram)
+                {
+                    if (addr+len > maxlisaram) len = maxlisaram - addr;
+                    FILE *df = fopen(".tmp/lisaem-mcp-dump.bin","wb");
+                    if (df)
+                    {
+                        fwrite(lisaram + addr, 1, len, df);
+                        fclose(df);
+                        snprintf(msg,sizeof(msg),"dumped %u bytes from %08x", (unsigned)len, (unsigned)addr);
+                    }
+                    else snprintf(msg,sizeof(msg),"dump failed (file open)");
+                }
+                else snprintf(msg,sizeof(msg),"dump failed (bad addr or no ram)");
+            }
+            else snprintf(msg,sizeof(msg),"bad dump command (use hex)");
+        }
+        else if (!strncmp(line,"find ",5))
+        {
+            const char *p=line+5;
+            uint8 pattern[256];
+            uint32 patlen=0;
+            while (*p && patlen < 256)
+            {
+                while (*p == ' ') p++;
+                if (!*p) break;
+                unsigned int b=0;
+                if (sscanf(p,"%2x",&b)==1)
+                {
+                    pattern[patlen++]=(uint8)b;
+                    p+=2;
+                }
+                else break;
+            }
+            if (patlen > 0 && lisaram)
+            {
+                uint32 found_addr=0xffffffff;
+                for (uint32 a=0; a <= maxlisaram - patlen; a++)
+                {
+                    if (!memcmp(lisaram+a, pattern, patlen))
+                    {
+                        found_addr=a;
+                        break;
+                    }
+                }
+                if (found_addr != 0xffffffff) snprintf(msg,sizeof(msg),"found @ %08x",found_addr);
+                else snprintf(msg,sizeof(msg),"not found");
+            }
+            else snprintf(msg,sizeof(msg),"bad find command or no ram");
+        }
+        else
+        {
+            snprintf(msg,sizeof(msg),"unknown command: %s",line);
+        }
+    }
+
+    if (lisa_mcp_client_fd >= 0)
+    {
+        char resp[1024];
+        snprintf(resp,sizeof(resp),
+                 "reason=command\n"
+                 "message=%s\n"
+                 "running=%d\n"
+                 "power=%d\n"
+                 "pc=%08x\n"
+                 "clock=%016llx\n"
+                 "mouse=%d,%d\n",
+                 msg,
+                 my_lisaframe ? my_lisaframe->running : -1,
+                 (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK)==POWER_ON)) ? 1 : 0,
+                 reg68k_pc,
+                 (long long)cpu68k_clocks,
+                 last_mouse_x, last_mouse_y);
+        send(lisa_mcp_client_fd, resp, strlen(resp), 0);
+    }
+
+    lisa_mcp_write_state("command",msg);
+}
+
+// Native stdio MCP (JSON-RPC over Content-Length framing). This reuses the existing in-process
+// control surfaces and file-based debug/Xenix state already present in this branch.
+static int lisa_mcp_stdio_mode = 0;
+static int lisa_mcp_stdio_outfd = -1;
+static char lisa_mcp_stdio_inbuf[262144];
+static size_t lisa_mcp_stdio_inlen = 0;
+
+static void lisa_mcp_json_escape_append(std::string &out, const char *s, size_t n)
+{
+    for (size_t i=0; i<n; i++)
+    {
+        unsigned char c=(unsigned char)s[i];
+        switch (c)
+        {
+            case '\\': out += "\\\\"; break;
+            case '\"': out += "\\\""; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20)
+                {
+                    char tmp[8];
+                    snprintf(tmp,sizeof(tmp),"\\u%04x",(unsigned int)c);
+                    out += tmp;
+                }
+                else out.push_back((char)c);
+        }
+    }
+}
+
+static std::string lisa_mcp_json_quote(const char *s)
+{
+    std::string out;
+    out.push_back('\"');
+    if (s) lisa_mcp_json_escape_append(out,s,strlen(s));
+    out.push_back('\"');
+    return out;
+}
+
+static std::string lisa_mcp_json_quote_n(const char *s, size_t n)
+{
+    std::string out;
+    out.push_back('\"');
+    if (s && n) lisa_mcp_json_escape_append(out,s,n);
+    out.push_back('\"');
+    return out;
+}
+
+static void lisa_mcp_stdio_write_all(const char *buf, size_t len)
+{
+    if (lisa_mcp_stdio_outfd < 0 || !buf || !len) return;
+    while (len)
+    {
+        ssize_t n=write(lisa_mcp_stdio_outfd,buf,len);
+        if (n < 0)
+        {
+            if (errno==EINTR) continue;
+            break;
+        }
+        if (n == 0) break;
+        buf += n;
+        len -= (size_t)n;
+    }
+}
+
+static void lisa_mcp_stdio_send_json(const std::string &json)
+{
+    if (!lisa_mcp_stdio_mode) return;
+    char hdr[96];
+    snprintf(hdr,sizeof(hdr),"Content-Length: %lu\r\n\r\n",(unsigned long)json.size());
+    lisa_mcp_stdio_write_all(hdr,strlen(hdr));
+    if (!json.empty()) lisa_mcp_stdio_write_all(json.data(),json.size());
+}
+
+static int lisa_mcp_json_skip_ws(const char *s, size_t len, size_t *i)
+{
+    while (*i < len)
+    {
+        char c=s[*i];
+        if (!(c==' ' || c=='\t' || c=='\r' || c=='\n')) break;
+        (*i)++;
+    }
+    return *i < len;
+}
+
+static int lisa_mcp_json_parse_string(const char *s, size_t len, size_t *i, std::string &out)
+{
+    out.clear();
+    if (*i >= len || s[*i] != '\"') return 0;
+    (*i)++;
+    while (*i < len)
+    {
+        unsigned char c=(unsigned char)s[*i];
+        if (c=='\"') { (*i)++; return 1; }
+        if (c=='\\')
+        {
+            (*i)++;
+            if (*i >= len) return 0;
+            char e=s[*i];
+            switch (e)
+            {
+                case '\"': out.push_back('\"'); break;
+                case '\\': out.push_back('\\'); break;
+                case '/':  out.push_back('/'); break;
+                case 'b':  out.push_back('\b'); break;
+                case 'f':  out.push_back('\f'); break;
+                case 'n':  out.push_back('\n'); break;
+                case 'r':  out.push_back('\r'); break;
+                case 't':  out.push_back('\t'); break;
+                case 'u':
+                    // Keep parser minimal: decode basic ASCII code points, replace others with '?'.
+                    if (*i + 4 >= len) return 0;
+                    {
+                        unsigned int v=0;
+                        for (int k=0; k<4; k++)
+                        {
+                            char h=s[*i+1+k];
+                            unsigned int d=0;
+                            if (h>='0' && h<='9') d=(unsigned int)(h-'0');
+                            else if (h>='a' && h<='f') d=(unsigned int)(10+h-'a');
+                            else if (h>='A' && h<='F') d=(unsigned int)(10+h-'A');
+                            else return 0;
+                            v=(v<<4)|d;
+                        }
+                        out.push_back((v<128) ? (char)v : '?');
+                        *i += 4;
+                    }
+                    break;
+                default: return 0;
+            }
+            (*i)++;
+            continue;
+        }
+        out.push_back((char)c);
+        (*i)++;
+    }
+    return 0;
+}
+
+static int lisa_mcp_json_skip_value(const char *s, size_t len, size_t *i);
+
+static int lisa_mcp_json_skip_compound(const char *s, size_t len, size_t *i, char open_c, char close_c)
+{
+    if (*i >= len || s[*i] != open_c) return 0;
+    (*i)++;
+    size_t depth=1;
+    while (*i < len && depth)
+    {
+        if (s[*i] == '\"')
+        {
+            std::string tmp;
+            if (!lisa_mcp_json_parse_string(s,len,i,tmp)) return 0;
+            continue;
+        }
+        if (s[*i] == open_c) depth++;
+        else if (s[*i] == close_c) depth--;
+        (*i)++;
+    }
+    return depth==0;
+}
+
+static int lisa_mcp_json_skip_value(const char *s, size_t len, size_t *i)
+{
+    lisa_mcp_json_skip_ws(s,len,i);
+    if (*i >= len) return 0;
+    char c=s[*i];
+    if (c=='\"') { std::string tmp; return lisa_mcp_json_parse_string(s,len,i,tmp); }
+    if (c=='{')  return lisa_mcp_json_skip_compound(s,len,i,'{','}');
+    if (c=='[')  return lisa_mcp_json_skip_compound(s,len,i,'[',']');
+    if (c=='t') { if (*i+4<=len && !strncmp(s+*i,"true",4)) { *i+=4; return 1; } return 0; }
+    if (c=='f') { if (*i+5<=len && !strncmp(s+*i,"false",5)) { *i+=5; return 1; } return 0; }
+    if (c=='n') { if (*i+4<=len && !strncmp(s+*i,"null",4)) { *i+=4; return 1; } return 0; }
+    if (c=='-' || (c>='0' && c<='9'))
+    {
+        (*i)++;
+        while (*i<len)
+        {
+            char d=s[*i];
+            if ((d>='0'&&d<='9') || d=='+' || d=='-' || d=='.' || d=='e' || d=='E') (*i)++;
+            else break;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int lisa_mcp_json_find_key_value_span(const char *obj, size_t len, const char *key, size_t *vstart, size_t *vend)
+{
+    size_t i=0;
+    std::string k;
+    lisa_mcp_json_skip_ws(obj,len,&i);
+    if (i>=len || obj[i] != '{') return 0;
+    i++;
+    for (;;)
+    {
+        lisa_mcp_json_skip_ws(obj,len,&i);
+        if (i>=len) return 0;
+        if (obj[i] == '}') return 0;
+        if (!lisa_mcp_json_parse_string(obj,len,&i,k)) return 0;
+        lisa_mcp_json_skip_ws(obj,len,&i);
+        if (i>=len || obj[i] != ':') return 0;
+        i++;
+        lisa_mcp_json_skip_ws(obj,len,&i);
+        size_t s=i, e=i;
+        if (!lisa_mcp_json_skip_value(obj,len,&e)) return 0;
+        if (k == key)
+        {
+            if (vstart) *vstart=s;
+            if (vend) *vend=e;
+            return 1;
+        }
+        i=e;
+        lisa_mcp_json_skip_ws(obj,len,&i);
+        if (i<len && obj[i]==',') { i++; continue; }
+        if (i<len && obj[i]=='}') return 0;
+    }
+}
+
+static int lisa_mcp_json_get_string_field(const char *obj, size_t len, const char *key, std::string &out)
+{
+    size_t s=0,e=0,i=0;
+    if (!lisa_mcp_json_find_key_value_span(obj,len,key,&s,&e)) return 0;
+    i=s;
+    return lisa_mcp_json_parse_string(obj,len,&i,out) && i==e;
+}
+
+static int lisa_mcp_json_get_bool_field(const char *obj, size_t len, const char *key, int *outv)
+{
+    size_t s=0,e=0;
+    if (!lisa_mcp_json_find_key_value_span(obj,len,key,&s,&e)) return 0;
+    if (e-s==4 && !strncmp(obj+s,"true",4)) { if (outv) *outv=1; return 1; }
+    if (e-s==5 && !strncmp(obj+s,"false",5)) { if (outv) *outv=0; return 1; }
+    return 0;
+}
+
+static int lisa_mcp_json_get_long_field(const char *obj, size_t len, const char *key, long *outv)
+{
+    size_t s=0,e=0;
+    if (!lisa_mcp_json_find_key_value_span(obj,len,key,&s,&e)) return 0;
+    char tmp[64];
+    size_t n=e-s;
+    if (n==0 || n>=sizeof(tmp)) return 0;
+    memcpy(tmp,obj+s,n); tmp[n]=0;
+    char *ep=NULL;
+    long v=strtol(tmp,&ep,10);
+    if (!ep || *ep) return 0;
+    if (outv) *outv=v;
+    return 1;
+}
+
+static int lisa_mcp_json_get_object_span_field(const char *obj, size_t len, const char *key, const char **sub, size_t *sublen)
+{
+    size_t s=0,e=0;
+    if (!lisa_mcp_json_find_key_value_span(obj,len,key,&s,&e)) return 0;
+    if (s>=len || obj[s] != '{') return 0;
+    if (sub) *sub=obj+s;
+    if (sublen) *sublen=e-s;
+    return 1;
+}
+
+static unsigned long lisa_mcp_parse_ulong_auto(const char *s, int *ok)
+{
+    if (ok) *ok=0;
+    if (!s || !*s) return 0;
+    while (*s==' ' || *s=='\t') s++;
+    int base=10;
+    if (s[0]=='0' && (s[1]=='x' || s[1]=='X')) { base=16; s+=2; }
+    char *ep=NULL;
+    unsigned long v=strtoul(s,&ep,base);
+    if (!ep || *ep) return 0;
+    if (ok) *ok=1;
+    return v;
+}
+
+static std::string lisa_mcp_read_text_file(const char *path)
+{
+    std::string out;
+    FILE *f=fopen(path,"rb");
+    if (!f) return out;
+    char buf[4096];
+    size_t n=0;
+    while ((n=fread(buf,1,sizeof(buf),f))>0) out.append(buf,n);
+    fclose(f);
+    return out;
+}
+
+static std::string lisa_mcp_kv_get(const std::string &txt, const char *key)
+{
+    if (!key || !*key) return std::string();
+    std::string pfx = std::string(key) + "=";
+    size_t pos = txt.find(pfx);
+    if (pos == std::string::npos) return std::string();
+    pos += pfx.size();
+    size_t end = txt.find('\n', pos);
+    if (end == std::string::npos) end = txt.size();
+    return txt.substr(pos, end - pos);
+}
+
+static int lisa_mcp_write_debug_command_file(const char *cmdline, std::string *err_out)
+{
+    if (!cmdline || !*cmdline)
+    {
+        if (err_out) *err_out="missing debug command";
+        return 0;
+    }
+    (void)mkdir(".tmp",0777);
+    FILE *f=fopen(".tmp/lisaem-debug-cmd.txt","wt");
+    if (!f)
+    {
+        if (err_out) *err_out="cannot open debug command file";
+        return 0;
+    }
+    fprintf(f,"%s\n",cmdline);
+    fclose(f);
+    return 1;
+}
+
+static int lisa_mcp_wait_debug_state(const char *wait_reason, int timeout_ms, int poll_ms, std::string &state_out)
+{
+    if (timeout_ms < 0) timeout_ms = 0;
+    if (poll_ms <= 0) poll_ms = 50;
+    int elapsed = 0;
+    for (;;)
+    {
+        state_out = lisa_mcp_read_text_file(".tmp/lisaem-debug-state.txt");
+        if (!state_out.empty())
+        {
+            std::string reason = lisa_mcp_kv_get(state_out,"reason");
+            std::string paused = lisa_mcp_kv_get(state_out,"paused");
+            std::string step_remaining = lisa_mcp_kv_get(state_out,"step_remaining");
+            if (wait_reason && *wait_reason)
+            {
+                if (reason == wait_reason) return 1;
+            }
+            else
+            {
+                if (paused == "1" && (step_remaining.empty() || step_remaining == "0")) return 1;
+            }
+        }
+        if (elapsed >= timeout_ms) break;
+        usleep((useconds_t)(poll_ms * 1000));
+        elapsed += poll_ms;
+    }
+    return 0;
+}
+
+static std::string lisa_mcp_base64_encode(const unsigned char *data, size_t len)
+{
+    static const char *tbl="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((len+2)/3)*4);
+    for (size_t i=0; i<len; i+=3)
+    {
+        unsigned int a=data[i];
+        unsigned int b=(i+1<len)?data[i+1]:0;
+        unsigned int c=(i+2<len)?data[i+2]:0;
+        unsigned int x=(a<<16)|(b<<8)|c;
+        out.push_back(tbl[(x>>18)&63]);
+        out.push_back(tbl[(x>>12)&63]);
+        out.push_back((i+1<len)?tbl[(x>>6)&63]:'=');
+        out.push_back((i+2<len)?tbl[x&63]:'=');
+    }
+    return out;
+}
+
+static int lisa_mcp_parse_hex_bytes(const char *s, unsigned char *out, size_t maxout, size_t *outlen)
+{
+    size_t n=0;
+    if (outlen) *outlen=0;
+    if (!s) return 0;
+    while (*s)
+    {
+        while (*s==' '||*s=='\t'||*s=='\r'||*s=='\n'||*s==','||*s==':') s++;
+        if (!*s) break;
+        if (s[0]=='0' && (s[1]=='x' || s[1]=='X')) s+=2;
+        int d1=-1,d2=-1;
+        char c=*s++;
+        if (c>='0'&&c<='9') d1=c-'0'; else if (c>='a'&&c<='f') d1=10+c-'a'; else if (c>='A'&&c<='F') d1=10+c-'A'; else return 0;
+        c=*s;
+        if (c>='0'&&c<='9') d2=c-'0'; else if (c>='a'&&c<='f') d2=10+c-'a'; else if (c>='A'&&c<='F') d2=10+c-'A'; else return 0;
+        s++;
+        if (n>=maxout) return 0;
+        out[n++]=(unsigned char)((d1<<4)|d2);
+    }
+    if (outlen) *outlen=n;
+    return n>0;
+}
+
+static std::string lisa_mcp_tail_file_bytes(const char *path, unsigned long cursor, long max_bytes, long max_lines, unsigned long *next_cursor)
+{
+    std::string data=lisa_mcp_read_text_file(path);
+    unsigned long cur=cursor;
+    if (cur > data.size()) cur=(unsigned long)data.size();
+    size_t start=(size_t)cur;
+    size_t end=data.size();
+    if (max_bytes > 0 && end > start + (size_t)max_bytes) end = start + (size_t)max_bytes;
+    std::string chunk = data.substr(start,end-start);
+    if (max_lines > 0)
+    {
+        long lines=0;
+        for (size_t i=0; i<chunk.size(); i++) if (chunk[i]=='\n') lines++;
+        while (lines > max_lines)
+        {
+            size_t p=chunk.find('\n');
+            if (p==std::string::npos) break;
+            chunk.erase(0,p+1);
+            start += p+1;
+            lines--;
+        }
+    }
+    if (next_cursor) *next_cursor=(unsigned long)(start + chunk.size());
+    return chunk;
+}
+
+static std::string lisa_mcp_status_text(void)
+{
+    char buf[512];
+    snprintf(buf,sizeof(buf),
+             "running=%d\npower=%d\npc=%08x\nclock=%016llx\nmouse=%d,%d\nmcp_stdio=%d\nraw_socket_port=1983\n",
+             my_lisaframe ? my_lisaframe->running : -1,
+             (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK)==POWER_ON)) ? 1 : 0,
+             reg68k_pc,
+             (long long)cpu68k_clocks,
+             last_mouse_x,last_mouse_y,
+             lisa_mcp_stdio_mode);
+    return std::string(buf);
+}
+
+static std::string lisa_mcp_tool_text_error(const char *msg)
+{
+    return std::string("error: ") + (msg ? msg : "unknown");
+}
+
+static int lisa_mcp_tool_handle(const std::string &tool, const char *args_obj, size_t args_len, std::string &out_text)
+{
+    out_text.clear();
+    const char *args = args_obj;
+    size_t alen = args_len;
+    static const char *debug_cmd_path=".tmp/lisaem-debug-cmd.txt";
+    static const char *debug_state_path=".tmp/lisaem-debug-state.txt";
+    static const char *xenix_log_path=".tmp/lisaem-xenix-console.txt";
+
+    if (tool == "lisa_status")
+    {
+        out_text = lisa_mcp_status_text();
+        return 1;
+    }
+    if (tool == "lisa_power")
+    {
+        std::string action;
+        if (!lisa_mcp_json_get_string_field(args,alen,"action",action)) { out_text=lisa_mcp_tool_text_error("missing action"); return 0; }
+        if (action=="power")
+        {
+            handle_powerbutton();
+            out_text="power toggled";
+            return 1;
+        }
+        if (action=="shutdown")
+        {
+            if (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK)==POWER_ON)) { handle_powerbutton(); out_text="shutdown requested"; }
+            else out_text="already powered off";
+            return 1;
+        }
+        if (action=="quit")
+        {
+            if (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK)==POWER_ON))
+            {
+                on_start_quit_on_poweroff=1;
+                handle_powerbutton();
+                out_text="quit requested (graceful)";
+            }
+            else
+            {
+                wxCommandEvent foo;
+                if (my_lisaframe) my_lisaframe->OnQuit(foo);
+                out_text="quit requested";
+            }
+            return 1;
+        }
+        if (action=="force-shutdown")
+        {
+            if (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK)==POWER_ON))
+            {
+                profile_unmount();
+                lisa_powered_off();
+                out_text="force shutdown executed";
+            }
+            else out_text="already powered off";
+            return 1;
+        }
+        out_text=lisa_mcp_tool_text_error("unknown action");
+        return 0;
+    }
+    if (tool == "lisa_run_state")
+    {
+        std::string action;
+        if (!lisa_mcp_json_get_string_field(args,alen,"action",action)) { out_text=lisa_mcp_tool_text_error("missing action"); return 0; }
+        if (action=="pause") { pause_run(); out_text="paused"; return 1; }
+        if (action=="run")   { resume_run(); out_text="running"; return 1; }
+        out_text=lisa_mcp_tool_text_error("unknown action");
+        return 0;
+    }
+    if (tool == "lisa_input_text")
+    {
+        std::string text;
+        int append_return=1;
+        if (!lisa_mcp_json_get_string_field(args,alen,"text",text)) { out_text=lisa_mcp_tool_text_error("missing text"); return 0; }
+        lisa_mcp_json_get_bool_field(args,alen,"append_return",&append_return);
+        int count=lisa_mcp_queue_text_bytes(text.c_str(),append_return);
+        char msg[96]; snprintf(msg,sizeof(msg),"queued %d chars",count);
+        out_text=msg;
+        return 1;
+    }
+    if (tool == "lisa_input_keycode")
+    {
+        long keycode=0, raw_key=0, raw_state=0;
+        if (lisa_mcp_json_get_long_field(args,alen,"raw_key",&raw_key))
+        {
+            if (!lisa_mcp_json_get_long_field(args,alen,"raw_state",&raw_state)) raw_state=0;
+            send_cops_keycode(((int)raw_key & 0x7f) | ((int)raw_state & 0x80));
+            char msg[96]; snprintf(msg,sizeof(msg),"keycode raw 0x%02lx state 0x%02lx",raw_key,raw_state);
+            out_text=msg;
+            return 1;
+        }
+        if (!lisa_mcp_json_get_long_field(args,alen,"keycode",&keycode)) { out_text=lisa_mcp_tool_text_error("missing keycode"); return 0; }
+        if (keycode<0 || keycode>255) { out_text=lisa_mcp_tool_text_error("bad keycode"); return 0; }
+        send_cops_keycode(((int)keycode & 0x7f) | KEY_DOWN);
+        send_cops_keycode(((int)keycode & 0x7f) | KEY_UP);
+        char msg[64]; snprintf(msg,sizeof(msg),"keycode %ld",keycode);
+        out_text=msg;
+        return 1;
+    }
+    if (tool == "lisa_input_mouse")
+    {
+        std::string action;
+        long x=0,y=0;
+        if (!lisa_mcp_json_get_string_field(args,alen,"action",action)) { out_text=lisa_mcp_tool_text_error("missing action"); return 0; }
+        if (!lisa_mcp_json_get_long_field(args,alen,"x",&x) || !lisa_mcp_json_get_long_field(args,alen,"y",&y)) { out_text=lisa_mcp_tool_text_error("missing x/y"); return 0; }
+        if (action=="move") { lisa_mcp_move_mouse((int)x,(int)y); out_text="mouse moved"; return 1; }
+        if (action=="click") { lisa_mcp_click_mouse((int)x,(int)y); out_text="mouse clicked"; return 1; }
+        out_text=lisa_mcp_tool_text_error("unknown action");
+        return 0;
+    }
+    if (tool == "lisa_shortcut")
+    {
+        std::string action;
+        if (!lisa_mcp_json_get_string_field(args,alen,"action",action)) { out_text=lisa_mcp_tool_text_error("missing action"); return 0; }
+        if (action=="return") { lisa_mcp_queue_return(); out_text="queued return"; return 1; }
+        if (action=="focus") { if (my_lisawin) my_lisawin->SetFocus(); out_text="focus set"; return 1; }
+        if (action=="apple1") { apple_1(); out_text="apple1"; return 1; }
+        if (action=="apple2")
+        {
+            wxString xenix=default_xenix_boot_floppy();
+            if (my_lisaframe && my_lisawin && (my_lisawin->floppystate & FLOPPY_ANIM_MASK)==FLOPPY_EMPTY && !xenix.IsEmpty())
+            {
+                int i=0;
+                if (my_lisaframe->running) { const wxCharBuffer s=CSTR(xenix); i=floppy_insert((char *)(const char *)s); }
+                else my_lisaframe->floppy_to_insert=xenix;
+                if (!i && (my_lisawin->floppystate & FLOPPY_ANIM_MASK)==FLOPPY_EMPTY)
+                    my_lisawin->floppystate=FLOPPY_NEEDS_REDRAW|FLOPPY_ANIMATING|FLOPPY_INSERT_0;
+            }
+            send_cops_keycode(KEYCODE_COMMAND|KEY_DOWN);
+            send_cops_keycode(KEYCODE_2|KEY_DOWN);
+            send_cops_keycode(KEYCODE_2|KEY_UP);
+            send_cops_keycode(KEYCODE_COMMAND|KEY_UP);
+            out_text="apple2";
+            return 1;
+        }
+        if (action=="apple3") { apple_3(); out_text="apple3"; return 1; }
+        out_text=lisa_mcp_tool_text_error("unknown action");
+        return 0;
+    }
+    if (tool == "lisa_memory_dump")
+    {
+        std::string addr_s,len_s,fmt;
+        if (!lisa_mcp_json_get_string_field(args,alen,"addr_hex",addr_s) || !lisa_mcp_json_get_string_field(args,alen,"len_hex",len_s))
+        { out_text=lisa_mcp_tool_text_error("missing addr_hex/len_hex"); return 0; }
+        if (!lisa_mcp_json_get_string_field(args,alen,"format",fmt)) fmt="base64";
+        int ok1=0,ok2=0;
+        unsigned long addr=lisa_mcp_parse_ulong_auto(addr_s.c_str(),&ok1);
+        unsigned long dlen=lisa_mcp_parse_ulong_auto(len_s.c_str(),&ok2);
+        if (!ok1 || !ok2 || !lisaram || addr>=maxlisaram) { out_text=lisa_mcp_tool_text_error("bad addr/len"); return 0; }
+        if (dlen > 0x10000ul) dlen = 0x10000ul;
+        if (addr + dlen > maxlisaram) dlen = maxlisaram - addr;
+        std::string data_out;
+        if (fmt=="hex")
+        {
+            char t[4];
+            for (unsigned long i=0; i<dlen; i++) { snprintf(t,sizeof(t),"%02x",lisaram[addr+i]); data_out += t; }
+        }
+        else
+        {
+            data_out = lisa_mcp_base64_encode((unsigned char *)(lisaram+addr),(size_t)dlen);
+            fmt="base64";
+        }
+        char head[128];
+        snprintf(head,sizeof(head),"addr=%08lx len=%lu format=%s\n",addr,dlen,fmt.c_str());
+        out_text=head;
+        out_text += data_out;
+        return 1;
+    }
+    if (tool == "lisa_memory_find")
+    {
+        std::string pat_s;
+        if (!lisa_mcp_json_get_string_field(args,alen,"pattern_hex",pat_s)) { out_text=lisa_mcp_tool_text_error("missing pattern_hex"); return 0; }
+        unsigned char pat[256];
+        size_t patlen=0;
+        if (!lisa_mcp_parse_hex_bytes(pat_s.c_str(),pat,sizeof(pat),&patlen) || !lisaram || patlen==0 || patlen>maxlisaram)
+        { out_text=lisa_mcp_tool_text_error("bad pattern"); return 0; }
+        unsigned long found=0xfffffffful;
+        for (uint32 a=0; a <= maxlisaram - (uint32)patlen; a++)
+        {
+            if (!memcmp(lisaram+a,pat,patlen)) { found=a; break; }
+        }
+        char msg[96];
+        if (found != 0xfffffffful) snprintf(msg,sizeof(msg),"found @ %08lx",found);
+        else snprintf(msg,sizeof(msg),"not found");
+        out_text=msg;
+        return 1;
+    }
+    if (tool == "lisa_debug_status")
+    {
+        out_text = lisa_mcp_read_text_file(debug_state_path);
+        if (out_text.empty()) { out_text=lisa_mcp_tool_text_error("debug state file not found"); return 0; }
+        return 1;
+    }
+    if (tool == "lisa_debug_command")
+    {
+        std::string cmd;
+        if (!lisa_mcp_json_get_string_field(args,alen,"command",cmd) || cmd.empty()) { out_text=lisa_mcp_tool_text_error("missing command"); return 0; }
+        std::string derr;
+        if (!lisa_mcp_write_debug_command_file(cmd.c_str(),&derr)) { out_text=lisa_mcp_tool_text_error(derr.c_str()); return 0; }
+        out_text = "queued debug command: ";
+        out_text += cmd;
+        std::string state=lisa_mcp_read_text_file(debug_state_path);
+        if (!state.empty()) { out_text += "\n--- debug state ---\n"; out_text += state; }
+        return 1;
+    }
+    if (tool == "lisa_run_cycle")
+    {
+        std::string action, wait_reason, dbg_state, derr;
+        long steps=1, timeout_ms=1500, poll_ms=50;
+        if (!lisa_mcp_json_get_string_field(args,alen,"action",action) || action.empty()) { out_text=lisa_mcp_tool_text_error("missing action"); return 0; }
+        lisa_mcp_json_get_long_field(args,alen,"steps",&steps);
+        lisa_mcp_json_get_long_field(args,alen,"timeout_ms",&timeout_ms);
+        lisa_mcp_json_get_long_field(args,alen,"poll_ms",&poll_ms);
+        lisa_mcp_json_get_string_field(args,alen,"wait_for_reason",wait_reason);
+
+        if (action=="pause")
+        {
+            pause_run();
+            lisa_mcp_write_debug_command_file("pause",NULL);
+            out_text = "paused";
+            return 1;
+        }
+        if (action=="run")
+        {
+            resume_run();
+            lisa_mcp_write_debug_command_file("run",NULL);
+            out_text = "running";
+            if (timeout_ms > 0)
+            {
+                int ok = lisa_mcp_wait_debug_state(wait_reason.empty() ? NULL : wait_reason.c_str(), (int)timeout_ms, (int)poll_ms, dbg_state);
+                out_text += ok ? "\nwait_result=matched\n" : "\nwait_result=timeout\n";
+                if (!dbg_state.empty()) { out_text += "--- debug state ---\n"; out_text += dbg_state; }
+            }
+            return 1;
+        }
+        if (action=="step")
+        {
+            if (steps <= 0) steps = 1;
+            char cmd[64];
+            snprintf(cmd,sizeof(cmd),"step %ld",steps);
+            if (!lisa_mcp_write_debug_command_file(cmd,&derr)) { out_text=lisa_mcp_tool_text_error(derr.c_str()); return 0; }
+            int ok = lisa_mcp_wait_debug_state(wait_reason.empty() ? NULL : wait_reason.c_str(), (int)timeout_ms, (int)poll_ms, dbg_state);
+            char head[128];
+            snprintf(head,sizeof(head),"step queued=%ld\nwait_result=%s\n",steps, ok ? "matched" : "timeout");
+            out_text = head;
+            if (!dbg_state.empty()) out_text += dbg_state;
+            return 1;
+        }
+        if (action=="mark")
+        {
+            if (!lisa_mcp_write_debug_command_file("mark",&derr)) { out_text=lisa_mcp_tool_text_error(derr.c_str()); return 0; }
+            (void)lisa_mcp_wait_debug_state(NULL, (int)timeout_ms, (int)poll_ms, dbg_state);
+            out_text = "mark requested\n";
+            if (!dbg_state.empty()) out_text += dbg_state;
+            return 1;
+        }
+        if (action=="rewind")
+        {
+            if (!lisa_mcp_write_debug_command_file("rewind",&derr)) { out_text=lisa_mcp_tool_text_error(derr.c_str()); return 0; }
+            (void)lisa_mcp_wait_debug_state(NULL, (int)timeout_ms, (int)poll_ms, dbg_state);
+            out_text = "rewind requested\n";
+            if (!dbg_state.empty()) out_text += dbg_state;
+            return 1;
+        }
+        out_text=lisa_mcp_tool_text_error("unknown action");
+        return 0;
+    }
+    if (tool == "lisa_xenix_console_tail")
+    {
+        std::string cursor_s;
+        long max_bytes=4096, max_lines=80;
+        unsigned long cursor=0, nextc=0;
+        if (lisa_mcp_json_get_string_field(args,alen,"cursor",cursor_s))
+        {
+            int ok=0; cursor=lisa_mcp_parse_ulong_auto(cursor_s.c_str(),&ok); if (!ok) cursor=0;
+        }
+        lisa_mcp_json_get_long_field(args,alen,"max_bytes",&max_bytes);
+        lisa_mcp_json_get_long_field(args,alen,"max_lines",&max_lines);
+        std::string chunk=lisa_mcp_tail_file_bytes(xenix_log_path,cursor,max_bytes,max_lines,&nextc);
+        char head[64];
+        snprintf(head,sizeof(head),"cursor=%lu\n",nextc);
+        out_text=head;
+        out_text += chunk;
+        return 1;
+    }
+    if (tool == "lisa_xenix_wait_console")
+    {
+        std::string substring, cursor_s;
+        unsigned long cursor=0, nextc=0;
+        long max_bytes=16384;
+        if (!lisa_mcp_json_get_string_field(args,alen,"substring",substring) || substring.empty()) { out_text=lisa_mcp_tool_text_error("missing substring"); return 0; }
+        if (lisa_mcp_json_get_string_field(args,alen,"cursor",cursor_s))
+        {
+            int ok=0; cursor=lisa_mcp_parse_ulong_auto(cursor_s.c_str(),&ok); if (!ok) cursor=0;
+        }
+        std::string chunk=lisa_mcp_tail_file_bytes(xenix_log_path,cursor,max_bytes,0,&nextc);
+        int matched=(chunk.find(substring) != std::string::npos) ? 1 : 0;
+        char head[96];
+        snprintf(head,sizeof(head),"matched=%d\ncursor=%lu\nnote=phase1 wait is polling-only (non-blocking in-process)\n",matched,nextc);
+        out_text=head;
+        if (matched) out_text += chunk;
+        return 1;
+    }
+    if (tool == "lisa_capture_trap_snapshot")
+    {
+        int include_dump=0;
+        std::string dump_addr_s,dump_len_s;
+        lisa_mcp_json_get_bool_field(args,alen,"include_dump",&include_dump);
+        lisa_mcp_json_get_string_field(args,alen,"dump_addr_hex",dump_addr_s);
+        lisa_mcp_json_get_string_field(args,alen,"dump_len_hex",dump_len_s);
+        out_text = "=== status ===\n";
+        out_text += lisa_mcp_status_text();
+        out_text += "\n=== debug ===\n";
+        std::string dbg=lisa_mcp_read_text_file(debug_state_path);
+        out_text += dbg.empty() ? "(missing)\n" : dbg;
+        out_text += "\n=== xenix-console-tail ===\n";
+        unsigned long nextc=0;
+        out_text += lisa_mcp_tail_file_bytes(xenix_log_path,0,8192,120,&nextc);
+        if (include_dump && lisaram && !dump_addr_s.empty() && !dump_len_s.empty())
+        {
+            int ok1=0,ok2=0;
+            unsigned long addr=lisa_mcp_parse_ulong_auto(dump_addr_s.c_str(),&ok1);
+            unsigned long dlen=lisa_mcp_parse_ulong_auto(dump_len_s.c_str(),&ok2);
+            if (ok1 && ok2 && addr<maxlisaram)
+            {
+                if (dlen > 512) dlen=512;
+                if (addr + dlen > maxlisaram) dlen = maxlisaram - addr;
+                out_text += "\n=== dump(base64) ===\n";
+                char head[64]; snprintf(head,sizeof(head),"addr=%08lx len=%lu\n",addr,dlen);
+                out_text += head;
+                out_text += lisa_mcp_base64_encode((unsigned char *)(lisaram+addr),(size_t)dlen);
+                out_text += "\n";
+            }
+        }
+        return 1;
+    }
+
+    out_text = lisa_mcp_tool_text_error("unknown tool");
+    return 0;
+}
+
+static std::string lisa_mcp_build_tools_list_result(void)
+{
+    std::string r="{\"tools\":[";
+#define ADD_TOOL(NAME,DESC,SCHEMA) \
+    do { if (r[r.size()-1] != '[') r += ","; \
+         r += "{\"name\":"; r += lisa_mcp_json_quote(NAME); \
+         r += ",\"description\":"; r += lisa_mcp_json_quote(DESC); \
+         r += ",\"inputSchema\":" SCHEMA "}"; } while (0)
+    ADD_TOOL("lisa_status","Get emulator runtime status and basic CPU/mouse state","{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}");
+    ADD_TOOL("lisa_power","Power/shutdown/quit controls","{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"}},\"required\":[\"action\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_run_state","Pause or resume emulation","{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"}},\"required\":[\"action\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_input_text","Queue text to Lisa keyboard input buffer","{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"append_return\":{\"type\":\"boolean\"}},\"required\":[\"text\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_input_keycode","Send cooked or raw Lisa keycode","{\"type\":\"object\",\"properties\":{\"keycode\":{\"type\":\"integer\"},\"raw_key\":{\"type\":\"integer\"},\"raw_state\":{\"type\":\"integer\"}},\"additionalProperties\":false}");
+    ADD_TOOL("lisa_input_mouse","Move/click mouse in Lisa display coordinates","{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"},\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"action\",\"x\",\"y\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_shortcut","Run common shortcuts (apple1/apple2/apple3/return/focus)","{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"}},\"required\":[\"action\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_memory_dump","Read RAM bytes and return hex/base64","{\"type\":\"object\",\"properties\":{\"addr_hex\":{\"type\":\"string\"},\"len_hex\":{\"type\":\"string\"},\"format\":{\"type\":\"string\"}},\"required\":[\"addr_hex\",\"len_hex\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_memory_find","Search RAM for hex byte pattern","{\"type\":\"object\",\"properties\":{\"pattern_hex\":{\"type\":\"string\"}},\"required\":[\"pattern_hex\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_debug_status","Read CPU debugger state file","{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}");
+    ADD_TOOL("lisa_debug_command","Send CPU debugger command via .tmp command file","{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_run_cycle","Control emulator/debug run cycle (pause/run/step/mark/rewind) with optional polling","{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"},\"steps\":{\"type\":\"integer\"},\"timeout_ms\":{\"type\":\"integer\"},\"poll_ms\":{\"type\":\"integer\"},\"wait_for_reason\":{\"type\":\"string\"}},\"required\":[\"action\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_xenix_console_tail","Tail Xenix console/event log with cursor","{\"type\":\"object\",\"properties\":{\"cursor\":{\"type\":\"string\"},\"max_bytes\":{\"type\":\"integer\"},\"max_lines\":{\"type\":\"integer\"}},\"additionalProperties\":false}");
+    ADD_TOOL("lisa_xenix_wait_console","Polling helper to check for console substring","{\"type\":\"object\",\"properties\":{\"substring\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"},\"cursor\":{\"type\":\"string\"}},\"required\":[\"substring\",\"timeout_ms\"],\"additionalProperties\":false}");
+    ADD_TOOL("lisa_capture_trap_snapshot","Collect status/debug/log snapshot for Xenix trap troubleshooting","{\"type\":\"object\",\"properties\":{\"include_dump\":{\"type\":\"boolean\"},\"dump_addr_hex\":{\"type\":\"string\"},\"dump_len_hex\":{\"type\":\"string\"}},\"additionalProperties\":false}");
+#undef ADD_TOOL
+    r += "]}";
+    return r;
+}
+
+static void lisa_mcp_send_jsonrpc_error(const std::string &id_raw, int code, const char *message)
+{
+    std::string j="{\"jsonrpc\":\"2.0\",\"id\":";
+    j += id_raw.empty() ? "null" : id_raw;
+    j += ",\"error\":{\"code\":";
+    char num[32]; snprintf(num,sizeof(num),"%d",code); j += num;
+    j += ",\"message\":";
+    j += lisa_mcp_json_quote(message ? message : "error");
+    j += "}}";
+    lisa_mcp_stdio_send_json(j);
+}
+
+static void lisa_mcp_send_jsonrpc_result_raw(const std::string &id_raw, const std::string &result_json)
+{
+    std::string j="{\"jsonrpc\":\"2.0\",\"id\":";
+    j += id_raw.empty() ? "null" : id_raw;
+    j += ",\"result\":";
+    j += result_json;
+    j += "}";
+    lisa_mcp_stdio_send_json(j);
+}
+
+static void lisa_mcp_send_tool_call_result(const std::string &id_raw, int ok, const std::string &text)
+{
+    std::string res="{\"content\":[{\"type\":\"text\",\"text\":";
+    res += lisa_mcp_json_quote_n(text.data(),text.size());
+    res += "}],\"isError\":";
+    res += ok ? "false" : "true";
+    res += "}";
+    lisa_mcp_send_jsonrpc_result_raw(id_raw,res);
+}
+
+static void lisa_mcp_handle_request_body(const char *body, size_t len)
+{
+    std::string method, id_raw;
+    const char *params_obj=NULL;
+    size_t params_len=0;
+    size_t s=0,e=0;
+    if (!body || !len) return;
+
+    if (lisa_mcp_json_find_key_value_span(body,len,"id",&s,&e)) id_raw.assign(body+s,e-s);
+    if (!lisa_mcp_json_get_string_field(body,len,"method",method))
+    {
+        if (!id_raw.empty()) lisa_mcp_send_jsonrpc_error(id_raw,-32600,"missing method");
+        return;
+    }
+    lisa_mcp_json_get_object_span_field(body,len,"params",&params_obj,&params_len);
+
+    if (method=="notifications/initialized") return;
+
+    if (method=="initialize")
+    {
+        std::string result="{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"LisaEm MCP\",\"version\":\"0.1\"}}";
+        lisa_mcp_send_jsonrpc_result_raw(id_raw,result);
+        return;
+    }
+    if (method=="ping")
+    {
+        lisa_mcp_send_jsonrpc_result_raw(id_raw,"{}");
+        return;
+    }
+    if (method=="tools/list")
+    {
+        lisa_mcp_send_jsonrpc_result_raw(id_raw,lisa_mcp_build_tools_list_result());
+        return;
+    }
+    if (method=="tools/call")
+    {
+        if (!params_obj || !params_len) { lisa_mcp_send_jsonrpc_error(id_raw,-32602,"missing params"); return; }
+        std::string toolname, text;
+        const char *args_obj=NULL;
+        size_t args_len=0;
+        if (!lisa_mcp_json_get_string_field(params_obj,params_len,"name",toolname))
+        {
+            lisa_mcp_send_jsonrpc_error(id_raw,-32602,"missing tool name");
+            return;
+        }
+        if (!lisa_mcp_json_get_object_span_field(params_obj,params_len,"arguments",&args_obj,&args_len))
+        {
+            static const char empty_args[]="{}";
+            args_obj=empty_args; args_len=2;
+        }
+        int ok=lisa_mcp_tool_handle(toolname,args_obj,args_len,text);
+        lisa_mcp_send_tool_call_result(id_raw,ok,text);
+        return;
+    }
+
+    if (!id_raw.empty()) lisa_mcp_send_jsonrpc_error(id_raw,-32601,"method not found");
+}
+
+static int lisa_mcp_stdio_find_frame(size_t *hdr_len, size_t *body_len)
+{
+    if (!hdr_len || !body_len) return 0;
+    *hdr_len=0; *body_len=0;
+    for (size_t i=0; i+3<lisa_mcp_stdio_inlen; i++)
+    {
+        size_t term=0;
+        if (i+3<lisa_mcp_stdio_inlen && !memcmp(lisa_mcp_stdio_inbuf+i,"\r\n\r\n",4)) term=4;
+        else if (i+1<lisa_mcp_stdio_inlen && !memcmp(lisa_mcp_stdio_inbuf+i,"\n\n",2)) term=2;
+        if (!term) continue;
+        size_t hlen=i+term;
+        unsigned long clen=0;
+        int have_clen=0;
+        size_t p=0;
+        while (p<i)
+        {
+            size_t q=p;
+            while (q<i && lisa_mcp_stdio_inbuf[q] != '\n') q++;
+            size_t ls=p, le=q;
+            if (le>ls && lisa_mcp_stdio_inbuf[le-1]=='\r') le--;
+            if (le>ls)
+            {
+                const char *line=lisa_mcp_stdio_inbuf+ls;
+                size_t llen=le-ls;
+                const char *prefix="Content-Length:";
+                size_t plen=strlen(prefix);
+                if (llen>=plen && !strncasecmp(line,prefix,plen))
+                {
+                    char tmp[64];
+                    size_t n=llen-plen;
+                    if (n>=sizeof(tmp)) n=sizeof(tmp)-1;
+                    memcpy(tmp,line+plen,n); tmp[n]=0;
+                    char *ep=NULL;
+                    clen=strtoul(tmp,&ep,10);
+                    have_clen=1;
+                }
+            }
+            p=(q<i)?(q+1):q;
+        }
+        if (!have_clen) return 0;
+        if (lisa_mcp_stdio_inlen < hlen + clen) return 0;
+        *hdr_len=hlen;
+        *body_len=(size_t)clen;
+        return 1;
+    }
+    return 0;
+}
+
+static void lisa_mcp_stdio_poll(void)
+{
+    if (!lisa_mcp_stdio_mode) return;
+
+    for (;;)
+    {
+        if (lisa_mcp_stdio_inlen >= sizeof(lisa_mcp_stdio_inbuf)) { lisa_mcp_stdio_inlen=0; break; }
+        ssize_t n=read(STDIN_FILENO,lisa_mcp_stdio_inbuf+lisa_mcp_stdio_inlen,sizeof(lisa_mcp_stdio_inbuf)-lisa_mcp_stdio_inlen);
+        if (n > 0) { lisa_mcp_stdio_inlen += (size_t)n; continue; }
+        if (n == 0) break;
+        if (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR) break;
+        break;
+    }
+
+    for (;;)
+    {
+        size_t hlen=0, blen=0;
+        if (!lisa_mcp_stdio_find_frame(&hlen,&blen)) break;
+        lisa_mcp_handle_request_body(lisa_mcp_stdio_inbuf+hlen,blen);
+        size_t consumed=hlen+blen;
+        if (consumed < lisa_mcp_stdio_inlen) memmove(lisa_mcp_stdio_inbuf,lisa_mcp_stdio_inbuf+consumed,lisa_mcp_stdio_inlen-consumed);
+        lisa_mcp_stdio_inlen -= consumed;
+    }
+}
+
+static void lisa_mcp_stdio_activate_from_cli(void)
+{
+    if (!on_start_mcp_stdio || lisa_mcp_stdio_mode) return;
+
+    int dupfd=dup(STDOUT_FILENO);
+    if (dupfd < 0) return;
+    int devnull=open("/dev/null",O_WRONLY);
+    if (devnull >= 0)
+    {
+        fflush(stdout);
+        dup2(devnull,STDOUT_FILENO);
+        close(devnull);
+    }
+    int flags=fcntl(STDIN_FILENO,F_GETFL,0);
+    if (flags >= 0) fcntl(STDIN_FILENO,F_SETFL,flags|O_NONBLOCK);
+    lisa_mcp_stdio_outfd=dupfd;
+    lisa_mcp_stdio_mode=1;
+    fprintf(stderr,"MCP-STDIO: enabled\n");
+}
+
+static void lisa_mcp_stdio_init(void)
+{
+    if (!on_start_mcp_stdio) return;
+    if (!lisa_mcp_stdio_mode) lisa_mcp_stdio_activate_from_cli();
+}
 
 static void compute_fullscreen_layout_metrics(int cw, int ch, int display_w, int display_h,
                                               int *sidebar_w_out, int *overlay_sidebar_out, float *scale_out)
@@ -1703,13 +3201,13 @@ void LisaEmFrame::OnEmulationTimer(wxTimerEvent& WXUNUSED(event))
   barrier=1;
 
   onidle_calls++;
+  lisa_mcp_stdio_poll();
+  lisa_mcp_process_commands();
 
-  if  (on_start_poweron && onidle_calls >5)
+    if (on_start_poweron)
       {
-          wxCommandEvent foo;
-          on_start_poweron=0;
-          OnPOWERKEY(foo);
-          ALERT_LOG(0,"on_start_poweron");
+        on_start_poweron=0;
+        handle_powerbutton();
       }
 
   if ((my_lisawin->floppystate & FLOPPY_ANIM_MASK) != FLOPPY_PRESENT &&
@@ -2624,6 +4122,7 @@ wxSize get_size_prefs(void);
 bool LisaEmApp::OnInit()
 {
     if (!wxApp::OnInit()) return false;      // call default behaviour (mandatory)
+    lisa_mcp_stdio_activate_from_cli();
 
     wxStandardPathsBase& stdp = wxStandardPaths::Get();
   wxString userconfigdir=stdp.GetUserConfigDir();
@@ -2919,21 +4418,28 @@ void LisaEmApp::OnInitCmdLine(wxCmdLineParser& parser)
 bool LisaEmApp::OnCmdLineParsed(wxCmdLineParser& parser)
 {
     int kioskmode=0;
+    bool got_floppy=0;
     on_start_poweron          = parser.Found(wxT("p"));
     on_start_harddisk         = parser.Found(wxT("d"));
     on_start_fullscreen       = parser.FoundSwitch(wxT("F"));  // negateable
+    on_start_mcp_stdio        = parser.Found(wxT("mcp-stdio"));
     on_start_quit_on_poweroff = parser.Found(wxT("q"));
 
-    parser.Found(wxT("f"),&on_start_floppy);
+    got_floppy = parser.Found(wxT("f"),&on_start_floppy);
     parser.Found(wxT("c"),&on_start_lisaconfig);
     parser.Found(wxT("z"),&on_start_zoom);
+    if (!got_floppy && !on_start_harddisk)
+    {
+      wxString p=default_xenix_boot_floppy();
+      if (!p.IsEmpty()) on_start_floppy=p;
+    }
 
     kioskmode= parser.FoundSwitch(wxT("k"));
     if (kioskmode)
     {
       on_start_fullscreen=1;
       on_start_quit_on_poweroff = 1;
-      on_start_poweron=1;
+      on_start_poweron=0;
     }
     return true;
 }
@@ -4634,19 +6140,6 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
 
   skin.screen_origin_x=ox; skin.screen_origin_y=oy;
 
-  {
-    static unsigned short ctr;
-    ctr++;
-    if (!(ctr & 7)) {ALERT_LOG(0,"win:%d,%d/wwin:%d,%d o_e_lisa_vid_sz %d,%d ox,oy:(%d,%d) hidpi_scale:%f",
-              w_width, w_height, ww_width,ww_height,
-              o_effective_lisa_vid_size_x,o_effective_lisa_vid_size_y,
-              ox,oy,
-              hidpi_scale);
-              if (my_lisahq3xbitmap) ALERT_LOG(0,"my_lisahq3xbitmap: %dx%d %d bits",my_lisahq3xbitmap->GetWidth(),my_lisahq3xbitmap->GetHeight(),my_lisahq3xbitmap->GetDepth());
-              if (my_lisabitmap)     ALERT_LOG(0,"my_lisabitmap:     %dx%d %d bits",my_lisabitmap->GetWidth(),my_lisabitmap->GetHeight(),my_lisabitmap->GetDepth());
-    }
-  }
-
   if (my_lisaframe->running)
   {
       ex=ww_width-ox; ey=ww_height-oy;
@@ -4684,10 +6177,10 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
       if (e_dirty_x_min>e_dirty_x_max) {e_dirty_x_min=0; e_dirty_x_max=o_effective_lisa_vid_size_x;}
       if (e_dirty_y_min>e_dirty_y_max) {e_dirty_y_min=0; e_dirty_y_max=o_effective_lisa_vid_size_y;}
 
-      if  ((dirtyscreen || videoramdirty) && (powerstate & POWER_ON_MASK) == POWER_ON)  {   
+      if  ((dirtyscreen || videoramdirty) && (powerstate & POWER_ON_MASK) == POWER_ON)  {
   //       ALERT_LOG(0,"Calling repainter... (%d,%d):%d,%d",rect.GetX(),rect.GetY(),rect.GetWidth(),rect.GetHeight() );
            fullrefresh=(my_lisawin->*RePainter)(); }
-      else  {ALERT_LOG(0,"skipping repaint");}
+      else  {}
             // ^ whoever came up with this C++ syntax instead of the old C one was on crack!
 
       // meh - we require full refresh on os x because double buffered dc is too slow and even though we repain the entire screen, it's faster.
@@ -4720,10 +6213,6 @@ int LisaWin::OnPaint_skinless(wxRect &rect, DCTYPE &dc)
                                 wxCOPY, false);
                 break;
           default:
-                fprintf(stderr,"AA/default paint: mode=%d canvas=(%d,%d) ww=(%d,%d) hidpi=%.3f ox=%d oy=%d dirty=(%d,%d,%d,%d) dst=(%d,%d,%d,%d)\n",
-                    (int)lisa_ui_video_mode, w_width, w_height, ww_width, ww_height, hidpi_scale, ox, oy,
-                    e_dirty_x_min, e_dirty_y_min, e_dirty_x_max, e_dirty_y_max,
-                    ox+_H(e_dirty_x_min), oy+_H(e_dirty_y_min), _H(e_dirty_x_max-e_dirty_x_min), _H(e_dirty_y_max-e_dirty_y_min));
                 dc.StretchBlit( (ox+_H(e_dirty_x_min)),                        (oy+_H(e_dirty_y_min)),                     // target x,y on window
                                 (_H(e_dirty_x_max-e_dirty_x_min)),             (_H(e_dirty_y_max-e_dirty_y_min)),          // width, height
                                 my_memDC,                                                                                  // src dc
@@ -4806,7 +6295,7 @@ extern "C" void x_setstatusbar(char *text)
     my_lisaframe->SetStatusBarText(x);
 }
 
-#define setstatusbar(text)         { ALERT_LOG(0,(text)); x_setstatusbar(text); }
+#define setstatusbar(text)         { x_setstatusbar(text); }
 
 extern "C" int islisarunning(void) { return     my_lisaframe->running;          }
 
@@ -4875,15 +6364,9 @@ int initialize_all_subsystems(void);
 
 void handle_powerbutton(void)
 {
-      ALERT_LOG(0,"======== ENTRY ================");
-      ALERT_LOG(0,"powerstate: %d",my_lisawin->powerstate);
-      ALERT_LOG(0,"running   : %d",my_lisaframe->running);
-      ALERT_LOG(0,"===============================");
-
       if  ((my_lisawin->powerstate & POWER_ON_MASK) == POWER_ON) // power is already on, send a power-key event instead
           {
             int i;
-            ALERT_LOG(0,"Power is on, sending power key event to COPS");
             setstatusbar("Sending power key event");
             presspowerswitch();                      // send keyboard event.
             my_lisaconfig->Save(pConfig, floppy_ram);
@@ -4899,13 +6382,11 @@ void handle_powerbutton(void)
             //setstatusbar("Shutting down printers");
             //iw_shutdown();                             // this is too slow, so skip it
             setstatusbar("Waiting for Lisa to shut down...");
-            ALERT_LOG(0,"Waiting for OS to shut down");
           }
       else
           {
             int ret;
-                
-            ALERT_LOG(0,"Powering on");   
+
             #ifdef USE_RAW_BITMAP_ACCESS
               #ifdef __WXMSW__
                 black();
@@ -4939,11 +6420,6 @@ void handle_powerbutton(void)
 
         my_lisaframe->UpdateProfileMenu();
         update_toolbar_button_states();
-
-        ALERT_LOG(0,"======== EXIT ================");
-        ALERT_LOG(0,"powerstate: %d",my_lisawin->powerstate);
-        ALERT_LOG(0,"running   : %d",my_lisaframe->running);
-        ALERT_LOG(0,"===============================");
 }
 
 
@@ -5510,6 +6986,7 @@ void LisaEmFrame::OnConfig(wxCommandEvent& WXUNUSED(event))
           }
           #endif
 
+          my_LisaConfigFrame->CentreOnScreen(wxBOTH);
           my_LisaConfigFrame->Show();
 }
 
@@ -6693,6 +8170,8 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
 
     
     barrier=0;
+    lisa_mcp_init_server();
+    lisa_mcp_stdio_init();
     clx=0;
     lastt2 = 0;
     lastclk = 0;
@@ -6776,7 +8255,6 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     keyMenu           = new wxMenu;
     DisplayMenu       = new wxMenu;
     DisplayRefreshSub = new wxMenu;
-    DisplayScaleSub   = new wxMenu;
     throttleMenu      = new wxMenu;
     profileMenu       = new wxMenu;
     helpMenu          = new wxMenu;
@@ -6818,24 +8296,6 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     DisplayRefreshSub->AppendRadioItem(ID_REFRESH_8Hz,   wxT(" 8Hz Refresh"),  wxT("8Hz Display Refresh"));
     DisplayRefreshSub->AppendRadioItem(ID_REFRESH_4Hz,   wxT(" 4Hz Refresh"),  wxT("4Hz Display Refresh"));
 
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_25,    wxT("0.25x"),         wxT("Set Video Magnification Size 0.25x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_50,    wxT("0.50x"),         wxT("Set Video Magnification Size 0.50x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_75,    wxT("0.75x"),         wxT("Set Video Magnification Size 0.75x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_100,   wxT("1.00x"),         wxT("Set Video Magnification Size 1.00x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_125,   wxT("1.25x"),         wxT("Set Video Magnification Size 1.25x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_150,   wxT("1.50x"),         wxT("Set Video Magnification Size 1.50x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_175,   wxT("1.75x"),         wxT("Set Video Magnification Size 1.75x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_200,   wxT("2.00x"),         wxT("Set Video Magnification Size 2.00x") );
-    #ifndef __WXOSX__
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_225,   wxT("2.25x"),         wxT("Set Video Magnification Size 2.25x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_250,   wxT("2.50x"),         wxT("Set Video Magnification Size 2.50x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_275,   wxT("2.75x"),         wxT("Set Video Magnification Size 2.75x") );
-    DisplayScaleSub->AppendRadioItem(ID_VID_SCALE_300,   wxT("3.00x"),         wxT("Set Video Magnification Size 3.00x") );
-    #endif
-    DisplayScaleSub->AppendSeparator();
-    DisplayScaleSub->Append(ID_VID_SCALE_ZOOMIN,         wxT("Zoom In \tCtrl-+"),   wxT("Zoom In") );
-    DisplayScaleSub->Append(ID_VID_SCALE_ZOOMOUT,        wxT("Zoom Out \tCtrl--"),  wxT("Zoom Out") );
-
     DisplayMenu->AppendRadioItem(ID_VID_HQ35X ,       wxT("HQX Upscaler")          ,  wxT("Aspect Corrected High Quality Magnification Filer hq3.5x") );
     DisplayMenu->AppendRadioItem(ID_VID_AA  ,         wxT("AntiAliased")           ,  wxT("Aspect Corrected with Anti Aliasing") );
     DisplayMenu->AppendRadioItem(ID_VID_AAG ,         wxT("AntiAliased with Gray Replacement"),  wxT("Aspect Corrected with Anti Aliasing and Gray Replacing") );
@@ -6849,10 +8309,6 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
     //DisplayMenu->AppendCheckItem(ID_FORCE_REFRESH, wxT("Refresh always"), wxT("Refresh video even when not necessary"));
     DisplayMenu->AppendSeparator();
 
-
-    DisplayMenu->Append(ID_VID_SCALED_SUB, wxT("Zoom/Scale"), DisplayScaleSub);
-
-    DisplayMenu->AppendSeparator();
 
     DisplayMenu->AppendCheckItem(ID_HIDE_HOST_MOUSE,wxT("Hide Host Mouse Pointer"),wxT("Hides the host mouse pointer - may cause lag"));
     DisplayMenu->AppendCheckItem(ID_USE_MOUSE_SCALE,wxT("Use Mouse Scaling"),wxT("Enab;e/Disable this if mouse tracking doesn't work"));
@@ -8518,12 +9974,12 @@ extern "C" void sound_play(uint16 t2)
     // (stub returns false). Use file-based path via AudioToolbox instead.
     {
       FILE *f;
-      f=fopen("/tmp/lisaem-sound.wav","wb");
+      f=fopen(".tmp/lisaem-sound.wav","wb");
       if (f) {
                 fwrite(dataptr,data_size+44,1,f); fclose(f);
-                my_lisa_sound.Create(wxT("/tmp/lisaem-sound.wav"),false);
+                my_lisa_sound.Create(wxT(".tmp/lisaem-sound.wav"),false);
                 my_lisa_sound.Play(wxSOUND_ASYNC|wxSOUND_LOOP);
-                unlink("/tmp/lisaem-sound.wav");
+                unlink(".tmp/lisaem-sound.wav");
               }
       errno=0;
     }

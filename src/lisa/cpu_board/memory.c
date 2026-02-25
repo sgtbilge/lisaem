@@ -2630,6 +2630,17 @@ uint16 lisa_rw_ram(uint32 addr)
 }
 
 
+uint16 lisa_rw_phys(uint32 addr)
+{
+   if (lisaram && addr < maxlisaram) return LOCENDIAN16(*(uint16 *)(&lisaram[addr]) );
+   return 0x3939;
+}
+
+void   lisa_ww_phys(uint32 addr, uint16 data)
+{
+   if (lisaram && addr < maxlisaram) {*(uint16 *)(&lisaram[addr]) = LOCENDIAN16(data); return;}
+}
+
 uint32 lisa_rl_ram(uint32 addr)
 {
    IS_MMU_VALID_HERE();

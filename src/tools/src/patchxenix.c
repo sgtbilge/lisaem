@@ -176,7 +176,7 @@ int main(int argc, char *argv[])
   }
 
 
-  int do_patch=15;
+   int do_patch=7;
   for (i=1; i<argc; i++)
    {
      if (strcmp(argv[i],"-a")==0)

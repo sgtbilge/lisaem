@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #include <reg68k.h>
 #include <cpu68k.h>
@@ -62,6 +63,101 @@ extern void lisa_console_output(uint8 c);
 #define SP  reg68k_regs[7+8]
 #define PC  reg68k_pc
 #define RTS {regs.pc=pc24=reg68k_pc=fetchlong(reg68k_regs[8+7]); reg68k_regs[8+7]+=4;}
+
+static int xenix_console_initialized=0;
+static uint32 xenix_last_unhandled_pc=0xffffffff;
+static uint32 xenix_putchar_pc=0xffffffff;
+static FILE *xenix_text_log=NULL;
+void xenix_log_note(const char *msg);
+
+static void xenix_close_logs(void)
+{
+    if (xenix_text_log) { fclose(xenix_text_log); xenix_text_log=NULL; }
+}
+
+static void xenix_open_logs(void)
+{
+    if (!xenix_text_log)
+    {
+      (void)mkdir(".tmp",0777);
+      xenix_text_log=fopen(".tmp/lisaem-xenix-console.txt","w");
+      if (xenix_text_log) {
+        setvbuf(xenix_text_log,NULL,_IONBF,0);
+        fprintf(xenix_text_log,"# LisaEm Xenix console capture\n");
+      }
+    }
+}
+
+static void xenix_log_char(uint8 c)
+{
+    xenix_open_logs();
+    if (xenix_text_log) {
+      if (c==9 || c==10 || c==13 || c==27 || (c>=32 && c<127)) fputc((int)c,xenix_text_log);
+      else fprintf(xenix_text_log,"<%02x>",(unsigned int)c);
+      fflush(xenix_text_log);
+    }
+}
+
+static uint32 xenix_find_putchar_pc(void)
+{
+    uint32 found=0xffffffff;
+    uint32 matches=0;
+    for (uint32 addr=0x00000000; addr<0x00200000; addr+=2)
+    {
+      if (lisa_rw_phys(addr)==0x1e2e && lisa_rw_phys(addr+2)==0x000b)
+      {
+        if (found==0xffffffff) found=addr;
+        matches++;
+      }
+    }
+    char note[128];
+    snprintf(note,sizeof(note),"[xenix-hle] putchar-scan matches=%u first=%08x",matches,found);
+    xenix_log_note(note);
+    return found;
+}
+
+void xenix_probe_stdout_candidate(uint32 pc, uint16 opcode)
+{
+    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+
+    // Probe common putchar argument fetch shapes:
+    // MOVE.B (A6),Dn / (A7),Dn / (A6)+,(A7)+ and d16(A6|A7),Dn
+    uint8 mode=(opcode>>3) & 7;
+    uint8 an=opcode & 7;
+    if ((opcode & 0xf000)!=0x1000) return;
+    if (!(an==6 || an==7)) return;
+    if (!(mode==2 || mode==3 || mode==5)) return;
+
+    int saved_abort=abort_opcode;
+    uint32 srcaddr=reg68k_regs[8+an];
+
+    if (mode==5) {
+      abort_opcode=2;
+      int16 disp=(int16)fetchword(pc+2);
+      if (abort_opcode) { abort_opcode=saved_abort; return; }
+      if (disp<-0x80 || disp>0x80) { abort_opcode=saved_abort; return; }
+      srcaddr=(uint32)(srcaddr + disp);
+    }
+
+    abort_opcode=2;
+    uint8 c=fetchbyte(srcaddr);
+    if (abort_opcode) { abort_opcode=saved_abort; return; }
+    abort_opcode=saved_abort;
+
+    if (c==0) return;
+    if (c==10 || c==13 || c==9 || (c>=32 && c<127)) xenix_log_char(c);
+}
+
+void xenix_log_console_char(uint8 c)
+{
+    xenix_log_char(c);
+}
+
+void xenix_log_note(const char *msg)
+{
+    xenix_open_logs();
+    if (xenix_text_log) { fprintf(xenix_text_log,"%s\n",msg); fflush(xenix_text_log); }
+}
 
 
 void uniplus_set_partition_table_size(uint32 disk, uint32 sswap, uint32 rroot, int kernel)
@@ -415,9 +511,15 @@ void  apply_monitor_hle_patches(void) {
 
 
 void  apply_xenix_hle_patches(void) {
-      
-      if (context != 1) return; // can only apply in context 1 (supervisor mode)
-      //xenix_patch=0;            // flag done so we don't keep patching repeatedly
+      static uint64 last_clks = 0;
+      // Only attempt to find/patch every 10 million cycles (approx every 2 seconds at 5MHz)
+      if (cpu68k_clocks < last_clks + 10000000) return;
+      last_clks = cpu68k_clocks;
+
+      xenix_putchar_pc=xenix_find_putchar_pc();
+      if (xenix_putchar_pc==0xffffffff) return;
+
+      xenix_patch=0;              // apply once; avoid repeated terminal re-inits/log spam
 
       ALERT_LOG(0,"#  # #    #### Patching for Xenix");
       ALERT_LOG(0,"#  # #    #    Patching for Xenix");
@@ -428,42 +530,49 @@ void  apply_xenix_hle_patches(void) {
       ALERT_LOG(0,"consoletermwindow=%d",consoletermwindow);
       // insert ProFile patches for Xenix here, not below.
 
-      if   (consoletermwindow) {
-            abort_opcode=0;
-            ALERT_LOG(0,"Enabling TerminalWx console window");
-            ALERT_LOG(0,"Enabling TerminalWx console window");
-            ALERT_LOG(0,"Enabling TerminalWx console window");
-
-            init_terminal_serial_port(CONSOLETERM);  // open terminal window for console
-
-            lisa_ww_ram(0x0000e180,0xf33d);          // 1e2e 000b                  : ....     :  263 : MOVE.B     $000b(A6),D7  PC:0000e184 SRC:
-
-            ALERT_LOG(0,"abort_opcode:%d",abort_opcode);
-            ALERT_LOG(0,"Enabling TerminalWx console window");
-            ALERT_LOG(0,"Enabling TerminalWx console window");
-            ALERT_LOG(0,"Enabling TerminalWx console window");
-
+      abort_opcode=0;
+      if (consoletermwindow && !xenix_console_initialized) {
+          init_terminal_serial_port(CONSOLETERM);
+          lpw_console_output("\f[Xenix console attached]\r\n");
+          xenix_console_initialized=1;
       }
-      else  {
-              ALERT_LOG(0,"TerminalWx NOT enabled because consoletermwindow=%d not enabling terminal",consoletermwindow);
-            }
+      xenix_close_logs();
+      xenix_open_logs();
+
+      uint16 xenix_putchar_op=lisa_rw_phys(xenix_putchar_pc);
+      DEBUG_LOG(0,"Xenix HLE patch site %08x old:%04x new:f33d",xenix_putchar_pc,xenix_putchar_op);
+      if (xenix_putchar_op!=0x1e2e) ALERT_LOG(0,"Xenix HLE patch site mismatch at %08x expected 1e2e got %04x",xenix_putchar_pc,xenix_putchar_op);
+      char patchnote[128];
+      snprintf(patchnote,sizeof(patchnote),"[xenix-hle] apply pc=%08x context=%d trap=%08x old-op=%04x",reg68k_pc,context,xenix_putchar_pc,xenix_putchar_op);
+      xenix_log_note(patchnote);
+      lisa_ww_phys(xenix_putchar_pc,0xf33d);
+
+      ALERT_LOG(0,"abort_opcode:%d",abort_opcode);
 }
 
 
 // 2022.03.06 added console terminal wx to Xenix because I'm on a roll, and why not.
 void hle_xenix_intercept(void) {
-  switch(PC) {
-    case 0x0000e180:    {
-                          D7=(D7 & 0xffffff00) | lisa_rb_ram(0x000b+(A6));  
-                          // putchar  1e2e 000b   : ....     :  263 : MOVE.B     $000b(A6),D7  PC:0000e184
-                          regs.pc=0x0000e184; pc24=0x0000e184; reg68k_pc=0x0000e184;
+  if (PC==xenix_putchar_pc) {
+                          uint8 c=fetchbyte(0x000b+(A6));
+                          D7=(D7 & 0xffffff00) | c;
+                          regs.pc=PC+4; pc24=PC+4; reg68k_pc=PC+4;
                           reg68k_sr.sr_struct.z=(D7==0);
-                          lisa_console_output((uint8) (D7 & 0xff) );
-                          ALERT_LOG(0,"%c",D7 & 0xff)
+                          DEBUG_LOG(0,"Xenix HLE putchar A6:%08x char:%02x",A6,c);
+                          lisa_console_output(c);
+                          xenix_log_char(c);
                           return;
+  }
+  switch(PC) {
+    default:
+                        if (xenix_last_unhandled_pc!=PC)
+                        {
+                          DEBUG_LOG(0,"Unhandled HLE intercept for Xenix at %d/%08x",context,PC);
+                          char pcnote[96];
+                          snprintf(pcnote,sizeof(pcnote),"[xenix-hle] unhandled-pc=%08x context=%d",PC,context);
+                          xenix_log_note(pcnote);
+                          xenix_last_unhandled_pc=PC;
                         }
-   default:
-                        ALERT_LOG(0,"Unhandled HLE intercept for Xenix at %d/%08x",context,PC);
   }
 }
 
@@ -488,6 +597,7 @@ void  hle_intercept(void) {
         case LISA_OFFICE_RUNNING:    hle_los_intercept();     return;
         case LISA_MACWORKS_RUNNING:  hle_mw30_intercept();    return;
       }
+      if (PC==xenix_putchar_pc) { hle_xenix_intercept(); return; }
 
       // console kernel putchar intercept - first few calls go to this before running OS is detectable since the kernel
       // hasn't yet initialized the vector tables, but still calls putchar
@@ -533,11 +643,12 @@ void  hle_intercept(void) {
                // write tag/sector specific
                case 0x00020ebc:           regs.pc=pc24=reg68k_pc=0x00020ef0; DEBUG_LOG(0,"profile.c:state:hle:write sector+tags");  // write tags and data in one shot, then return to 0x00020ef0
                                 size=D0; // d5
-                                a4=A4;
-                                while(size--) {
-                                                if (P->indexwrite>542) {    ALERT_LOG(0,"ProFile buffer overrun!"); P->indexwrite=4;}
-                                                P->DataBlock[P->indexwrite++]=fetchbyte(a4++);
-                                              }
+                                 a4=A4;
+                                 while(size--) {
+                                                 if (P->indexwrite>542) {    ALERT_LOG(0,"ProFile buffer overrun!"); P->indexwrite=4;}
+                                                 uint32 rdaddr=a4++;
+                                                 P->DataBlock[P->indexwrite++]=fetchbyte(rdaddr);
+                                               }
     
                                 return; // we're done, so return.
                    

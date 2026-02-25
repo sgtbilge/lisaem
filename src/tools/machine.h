@@ -3,7 +3,7 @@
 *                machine.h -  detected integer types for this host                     *
 *                              http://lisaem.sunder.net                                *
 *                                                                                      *
-*                   Copyright (C) 1998, 2020 Ray A. Arachelian                         *
+*                   Copyright (C) 1998, 2021 Ray A. Arachelian                         *
 *                                All Rights Reserved                                   *
 *                                                                                      *
 \**************************************************************************************/
@@ -18,7 +18,7 @@
 
 
 /*---------------------------------------------
-  uname -msr: Linux 5.8.0-41-generic x86_64
+  uname -msr: Darwin 25.3.0 arm64
 
  *---------------------------------------------*/
 /* sizeof(char     )= 1 */

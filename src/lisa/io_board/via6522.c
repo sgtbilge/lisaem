@@ -203,12 +203,13 @@ void VIAProfileLoop(int vianum, ProFileType *P, int event)
       // can use XOR below with BSY
       if ( BSY ^ (via[vianum].via[PCR] & 1) )
          {
-           if ((via[vianum].via[IFR] & VIA_IRQ_BIT_CA1)==0)
+           if ((via[vianum].via[IER] & VIA_IRQ_BIT_CA1)==0)
                 {DEBUG_LOG(0,"CA1 IER is not enabled, not checking for IRQ");}
            else {via[vianum].via[IFR] |=VIA_IRQ_BIT_CA1;
+                FIX_VIA_IFR(vianum);
                 DEBUG_LOG(0,"profile.c:Enabling BSY IRQ on CA1 for VIA #%d BSY transitioned to:%d%d PCR flag:%d",vianum,BSY,NBSY,(via[vianum].via[PCR] & 1));}
-           return;
-         }
+            return;
+          }
     }
 /*
       //- not sure which is right. 1=positive edge, 0=negative edge, I think the logical XOR
@@ -591,7 +592,8 @@ void  via2_ora(uint8 data, uint8 regnum)
     VIA_CLEAR_IRQ_PORT_A(2); // clear CA1/CA2 on ORA/IRA access
     via[2].last_pa_write=cpu68k_clocks;
     DEBUG_LOG(0,"ORA:%02x DDRA:%02x   ORB:%02x DDRB:%0x",via[2].via[ORA],via[2].via[DDRA],via[2].via[ORB],via[2].via[DDRB]);
-    if (via[2].via[DDRA]==0) return;    // can't write just yet, ignore.
+    if (via[2].via[DDRA]==0 &&
+        !(via[2].ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))) return;    // can't write just yet, ignore.
     if ( check_contrast_set()) return;
 
     if (via[2].via[ORBB] & via[2].via[DDRB] & 4) return;    // driver enable is off, don't process ADMP/Profile data output.
@@ -1471,6 +1473,8 @@ void lisa_wb_Oxd800_par_via2(uint32 addr, uint8 xvalue)
             if ( !via[2].via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        via[2].orapending=1;
                                        DEBUG_LOG(0,"ORANH: Not writing %02x now, but setting pending since DDRA=0",xvalue);
+                                       if (via[2].ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                          via2_ora(via[2].via[ORAA],15);
                                        return;
                                     }
 
@@ -1492,6 +1496,8 @@ void lisa_wb_Oxd800_par_via2(uint32 addr, uint8 xvalue)
 
             if ( !via[2].via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        via[2].orapending=1;
+                                       if (via[2].ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                          via2_ora(via[2].via[ORAA],ORA);
                                        return;
                                     }
 
@@ -2034,7 +2040,8 @@ void  viaX_ora(viatype *V,uint8 data, uint8 regnum)
     VIA_CLEAR_IRQ_PORT_A(V->vianum); // clear CA1/CA2 on ORA/IRA access
     V->last_pa_write=cpu68k_clocks;
     DEBUG_LOG(0,"VIA:%D ORA:%02x DDRA:%02x   ORB:%02x DDRB:%0x",V->vianum,V->via[ORA],V->via[DDRA],V->via[ORB],V->via[DDRB]);
-    if (V->via[DDRA]==0) return;    // can't write just yet, ignore.
+    if (V->via[DDRA]==0 &&
+        !(V->ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))) return;    // can't write just yet, ignore.
     if (V->vianum==2) {if ( check_contrast_set()) return;}
 
     if (V->via[ORBB] & V->via[DDRB] & 4) return;    // driver enable is off, don't process ADMP/Profile data output.
@@ -2511,6 +2518,8 @@ void lisa_wb_ext_2par_via(ViaType *V,uint32 addr, uint8 xvalue)
             if ( !V->via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        V->orapending=1;
                                        DEBUG_LOG(0,"ORANH: Not writing %02x now, but setting pending since DDRA=0",xvalue);
+                                       if (V->ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                          viaX_ora(V,V->via[ORAA],15);
                                        return;
                                 }
             DEBUG_LOG(0,"profile.c:widget.c: Lisa->Profile ORA2NH %02x   pc24:%08x",V->via[ORA], pc24);
@@ -2530,6 +2539,8 @@ void lisa_wb_ext_2par_via(ViaType *V,uint32 addr, uint8 xvalue)
 
             if ( !V->via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        V->orapending=1;
+                                       if (V->ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                          viaX_ora(V,V->via[ORAA],ORA);
                                        return;
                                     }
             DEBUG_LOG(0,"profile.c:widget.c: Lisa->Profile ORA2 %02x  pc24:%08x",V->via[ORA], pc24);

@@ -3,6 +3,7 @@
 
 #include <wx/wx.h>
 #include <wx/notebook.h>
+#include <wx/scrolwin.h>
 
 #include "LisaConfig.h"
 
@@ -22,10 +23,10 @@ public:
     ~LisaConfigFrame();
 
     // creators
-    wxPanel    *CreateMainConfigPage( wxNotebook *parent);
-    wxPanel    *CreatePortsConfigPage(wxNotebook *parent);
-    wxPanel    *CreateSlotConfigPage( wxNotebook *parent, int slot);
-    wxPanel    *CreatePrinterConfigPage(wxNotebook *parent);
+    wxScrolledWindow *CreateMainConfigPage( wxNotebook *parent);
+    wxScrolledWindow *CreatePortsConfigPage(wxNotebook *parent);
+    wxScrolledWindow *CreateSlotConfigPage( wxNotebook *parent, int slot);
+    wxScrolledWindow *CreatePrinterConfigPage(wxNotebook *parent);
 
     void        CreateNotebook(       wxNotebook *parent);
 
