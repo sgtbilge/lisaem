@@ -355,14 +355,14 @@ void do_profile_read(ProFileType *P, uint32 block)
 
     if (blk!=NULL) memcpy( &(P->DataBlock[4+P->DC42.tagsize]), blk, P->DC42.datasize); //4
 
-    if (block==0) {
+    if (block==0 && blk!=NULL) {
         bootblockchecksum=0;
         for (uint32 i=0; i<P->DC42.datasize; i++) bootblockchecksum=( (bootblockchecksum<<1) | ((bootblockchecksum & 0x80000000) ? 1:0) ) ^ blk[i] ^ i;
     }
 
     blk=dc42_read_sector_tags(&(P->DC42),block);
 
-    if (block==0) {
+    if (block==0 && blk!=NULL) {
         for (uint32 i=0; i<P->DC42.tagsize; i++) bootblockchecksum=( (bootblockchecksum<<1) | ((bootblockchecksum & 0x80000000) ? 1:0) ) ^ blk[i] ^ i;
         ALERT_LOG(0,"Bootblock checksum:%08x for %s",bootblockchecksum,P->DC42.fname);
     }
@@ -381,8 +381,9 @@ void do_profile_read(ProFileType *P, uint32 block)
 	{
         ALERT_LOG(0,"Error reading ProFile Image! errno: %d, State:%d,IndexWrite:%d,ProfileCommand:%d,BSY:%d,Data:%d,CMDL:%d,buffer:%2x:%2x:%2x:%2x:%2x:%2x\n",
 			errno,
+			P->StateMachineStep,
 			P->indexwrite,
-			P->StateMachineStep,P->Command,P->BSYLine,P->VIA_PA,P->CMDLine,
+			P->Command,P->BSYLine,P->VIA_PA,P->CMDLine,
 			P->DataBlock[4],P->DataBlock[5],P->DataBlock[6],P->DataBlock[7],
 			P->DataBlock[8],P->DataBlock[9]);
 
@@ -469,10 +470,11 @@ void do_profile_write(ProFileType *P,uint32 block)
 	if ( errno )
 	{
 
-        EXIT(0,0,"Error reading ProFile Image! errno: %d, State:%d,IndexWrite:%d,ProfileCommand:%d,BSY:%d,Data:%d,CMDL:%d,buffer:%2x:%2x:%2x:%2x:%2x:%2x\n",
+        EXIT(0,0,"Error writing ProFile Image! errno: %d, State:%d,IndexWrite:%d,ProfileCommand:%d,BSY:%d,Data:%d,CMDL:%d,buffer:%2x:%2x:%2x:%2x:%2x:%2x\n",
 			errno,
+			P->StateMachineStep,
 			P->indexwrite,
-			P->StateMachineStep,P->Command,P->BSYLine,P->VIA_PA,P->CMDLine,
+			P->Command,P->BSYLine,P->VIA_PA,P->CMDLine,
 			P->DataBlock[4],P->DataBlock[5],P->DataBlock[6],P->DataBlock[7],
 			P->DataBlock[8],P->DataBlock[9]);
 	}
@@ -556,6 +558,7 @@ ALERT_LOG(0,"Attempting to open profile:%s",filename);
             }
 
             i=dc42_create(filename,"-lisaem.sunder.net hd-",blocks[sz]*512,blocks[sz]*20);
+            if (i) {ALERT_LOG(0,"Failed to create ProFile drive image!"); return -1;}
             i=dc42_open(&P->DC42,filename,"wm");
             if (i) {ALERT_LOG(0,"Failed to open newly created ProFile drive!");}
          }
@@ -746,8 +749,7 @@ void ProfileLoop(ProFileType *P, int event)
 
     if (  !(profile_power & (1<<(P->vianum-2)) )  ) return;
 
-    if ( !P->DENLine && P->vianum==2) {DEBUG_LOG(0,"DEN is disabled on via#%d- ignoring ProFile commands",P->vianum); return;}                   // Drive Enabled is off (active low 0=enabled, 1=disable profile)
-    if ( !P->DENLine && P->vianum!=2) {DEBUG_LOG(0,"DEN is disabled on via#%d- ignoring ProFile commands",P->vianum); return;}                   // Drive Enabled is off (active low 0=enabled, 1=disable profile)
+    if ( !P->DENLine) {DEBUG_LOG(0,"DEN is disabled on via#%d- ignoring ProFile commands",P->vianum); return;}                   // Drive Enabled is off (active low 0=enabled, 1=disable profile)
         
 #ifdef DEBUG
 if (!EVENT_WRITE_NUL)
@@ -1249,7 +1251,7 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
          return;
 
 
-    case WRITE_BLOCK_STATE:                    // 8  // do the write and waste some time
+    case WRITE_BLOCK_STATE:                    // 9  // do the write and waste some time
          #ifdef DEBUG                          // don't fill up the log with useless shit
          if (!(EVENT_WRITE_NUL))
          DEBUG_LOG(0,"State:9 - write and waste more time (%d)",PROFILE_WAIT_EXEC_CYCLE);
@@ -1293,7 +1295,7 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
             P->DataBlock[522+ 5],
             P->DataBlock[522+ 6],
             P->DataBlock[522+ 7],
-            P->DataBlock[522+ 0],
+            P->DataBlock[522+ 8],
             P->DataBlock[522+ 9],
             P->DataBlock[522+ 10],
             P->DataBlock[522+ 11],
