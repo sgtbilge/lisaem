@@ -295,6 +295,8 @@ void get_profile_spare_table(ProFileType *P)
 }
 
 
+static int xenix_idle_pf_compat_enabled(void); // forward declaration; defined below
+
 void do_profile_read(ProFileType *P, uint32 block)
 {
     //uint16 i,j;
@@ -320,7 +322,9 @@ void do_profile_read(ProFileType *P, uint32 block)
 		if (lisa_ram_safe_getbyte(1,0x29d)==0x02) lisa_ram_safe_setbyte(1,0x29c,0xe0); 
     }
 
-    if (block<0x00f00000)   block=deinterleave5(block);
+    if (block<0x00f00000) block=deinterleave5(block);
+    { char _di[80]; snprintf(_di,sizeof(_di),"[xenix-pf-read] block=%lu (deinterleaved)",
+        (unsigned long)block); xenix_log_note(_di); }
 
 	if ( block==0x00fffffe)                 // return ProfileRAM buffer contents
 	{
@@ -391,6 +395,16 @@ void do_profile_read(ProFileType *P, uint32 block)
 
 	P->indexread=0;                     // reset index pointers to status
 	P->indexwrite=4;
+
+    { char _rd[160]; snprintf(_rd,sizeof(_rd),
+        "[xenix-pf-read2] blk=%lu stat=%02x%02x%02x%02x tag=%02x%02x%02x%02x data=%02x%02x%02x%02x%02x%02x",
+        (unsigned long)block,
+        P->DataBlock[0],P->DataBlock[1],P->DataBlock[2],P->DataBlock[3],
+        P->DataBlock[4],P->DataBlock[5],P->DataBlock[6],P->DataBlock[7],
+        P->DataBlock[4+P->DC42.tagsize],P->DataBlock[5+P->DC42.tagsize],
+        P->DataBlock[6+P->DC42.tagsize],P->DataBlock[7+P->DC42.tagsize],
+        P->DataBlock[8+P->DC42.tagsize],P->DataBlock[9+P->DC42.tagsize]);
+      xenix_log_note(_rd); }
 }
 
 
@@ -656,6 +670,8 @@ char *profile_event_names[5]=
         "write NUL"
      };
 
+static int xenix_idle_pf_compat_enabled(void);
+static int xenix_idle_pf_relaxed_timeout_state(uint8 state);
 
 // implement a timeout that resets the state machine back to state 0, and various delays.
 
@@ -670,6 +686,28 @@ char *profile_event_names[5]=
 
 #define CHECK_PROFILE_LOOP_TIMEOUT      {if (P->clock_e<=cpu68k_clocks)                                      \
                                             {                                                                \
+                                             if (xenix_idle_pf_compat_enabled() &&                            \
+                                                 xenix_idle_pf_relaxed_timeout_state(P->StateMachineStep))    \
+                                               {                                                               \
+                                                 if (xenix_relaxed_timeout_state==P->StateMachineStep)        \
+                                                     xenix_relaxed_timeout_count++;                           \
+                                                 else                                                          \
+                                                     {xenix_relaxed_timeout_state=P->StateMachineStep;        \
+                                                      xenix_relaxed_timeout_count=1;}                         \
+                                                                                                               \
+                                                 if (xenix_relaxed_timeout_count<=8)                          \
+                                                  {                                                            \
+                                                    if (P->StateMachineStep==GET_CMDBLK_STATE && !P->BSYLine) \
+                                                       P->BSYLine=1;                                          \
+                                                    SET_PROFILE_LOOP_TIMEOUT(HALF_OF_A_SECOND);               \
+                                                    DEBUG_LOG(0,"Xenix idle-compat timeout extension in state:%d attempt:%u",\
+                                                              P->StateMachineStep,xenix_relaxed_timeout_count);\
+                                                    return;                                                    \
+                                                  }                                                            \
+                                                                                                               \
+                                                 xenix_relaxed_timeout_state=-1;                              \
+                                                 xenix_relaxed_timeout_count=0;                               \
+                                               }                                                               \
                                              if (P->StateMachineStep==GET_CMDBLK_STATE && !P->BSYLine)       \
                                                 {P->BSYLine=2;                                               \
                                                 DEBUG_LOG(0,"force State:4b at timeout");     }              \
@@ -739,13 +777,31 @@ char *profile_state_names[]={
    /* 12 */ "SEND_STATUS_BYTES_STATE"
 };
 
+static int xenix_idle_pf_compat_enabled(void)
+{
+    if (!xenix_idle_profile_compat) return 0;
+    // Also enable during bootloader phase (before kernel sets trap vectors that
+    // trigger LISA_XENIX_RUNNING detection) so ProFile handshake can complete.
+    return (running_lisa_os == LISA_XENIX_RUNNING ||
+            running_lisa_os == LISA_ROM_RUNNING   ||
+            running_lisa_os == UNKNOWN_OS_RUNNING);
+}
+
+static int xenix_idle_pf_relaxed_timeout_state(uint8 state)
+{
+    return (state==WAIT_1st_0x55_STATE ||
+            state==GET_CMDBLK_STATE    ||
+            state==WAIT_2nd_0x55_STATE ||
+            state==WAIT_3rd_0x55_STATE);
+}
+
 extern void  apply_los31_hacks(void);
 extern void apply_mw30_hacks(void);
 
 static void profile_handshake_reset(ProFileType *P, const char *reason)
 {
     if (reason) DEBUG_LOG(0,"Profile handshake reset: %s", reason);
-    if ((running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481) && reason)
+    if ((running_lisa_os==LISA_XENIX_RUNNING) && reason)
     {
       char note[192];
       snprintf(note,sizeof(note),"[xenix-pf-reset] via=%d state=%d reason=%s pa=%02x cmd=%d bsy=%d rrw=%d idxr=%d idxw=%d pc=%08x",
@@ -758,7 +814,8 @@ static void profile_handshake_reset(ProFileType *P, const char *reason)
     P->last_a_accs=0;
     P->indexread=4;
     P->indexwrite=4;
-    SET_PROFILE_LOOP_TIMEOUT(TENTH_OF_A_SECOND);
+    if (xenix_idle_pf_compat_enabled()) { SET_PROFILE_LOOP_TIMEOUT(HALF_OF_A_SECOND); }
+    else                                { SET_PROFILE_LOOP_TIMEOUT(TENTH_OF_A_SECOND); }
 }
 
 void ProfileLoop(ProFileType *P, int event)
@@ -768,9 +825,26 @@ void ProfileLoop(ProFileType *P, int event)
     static int xenix_last_cmd=-1;
     static int xenix_last_bsy=-1;
     static int xenix_last_rrw=-1;
+    static int xenix_relaxed_timeout_state=-1;
+    static uint32 xenix_relaxed_timeout_count=0;
+    static int xenix_powered_off_ports_mask=0;
     uint32 blocknumber=0;
+    int powered_mask_bit=(1<<(P->vianum-2));
 
-    if (  !(profile_power & (1<<(P->vianum-2)) )  ) return;
+    if (running_lisa_os!=LISA_XENIX_RUNNING) xenix_powered_off_ports_mask=0;
+    if (  !(profile_power & powered_mask_bit)  )
+    {
+      if ((running_lisa_os==LISA_XENIX_RUNNING) && !(xenix_powered_off_ports_mask & powered_mask_bit))
+      {
+        char note[192];
+        snprintf(note,sizeof(note),"[xenix-pf-power] via=%d profile_power=%d state=%d pc=%08x",
+                 P->vianum,profile_power,P->StateMachineStep,reg68k_pc);
+        xenix_log_note(note);
+      }
+      xenix_powered_off_ports_mask|=powered_mask_bit;
+      return;
+    }
+    xenix_powered_off_ports_mask&=~powered_mask_bit;
 
     if ( !P->DENLine && P->vianum==2) {DEBUG_LOG(0,"DEN is disabled on via#%d- ignoring ProFile commands",P->vianum); return;}                   // Drive Enabled is off (active low 0=enabled, 1=disable profile)
     if ( !P->DENLine && P->vianum!=2) {DEBUG_LOG(0,"DEN is disabled on via#%d- ignoring ProFile commands",P->vianum); return;}                   // Drive Enabled is off (active low 0=enabled, 1=disable profile)
@@ -845,6 +919,12 @@ if (!EVENT_WRITE_NUL)
       xenix_last_cmd=-1;
       xenix_last_bsy=-1;
       xenix_last_rrw=-1;
+    }
+
+    if (!xenix_idle_pf_compat_enabled())
+    {
+      xenix_relaxed_timeout_state=-1;
+      xenix_relaxed_timeout_count=0;
     }
 
 
@@ -968,6 +1048,14 @@ if (!EVENT_WRITE_NUL)
                                                 SET_PROFILE_LOOP_TIMEOUT(FIFTH_OF_A_SECOND);
 
                                                 DEBUG_LOG(0,"State:transition to Step:4 - got 0x55");
+                                                // patchxenix bootloader is interrupt-driven: it sends command bytes only
+                                                // after a CA1 IRQ (BSYLine 0→1 edge). BSYLine is already 1 here from
+                                                // state2, so state4's BSYLine=1 would generate no edge. Reset to 0 so
+                                                // state4's first BSYLine=1 creates the edge and fires the CA1 IRQ.
+                                                if (xenix_idle_pf_compat_enabled())
+                                                    { P->BSYLine=0; xenix_log_note("[xenix-pf-2to4] state2->4: BSY reset to 0 for state4 IRQ edge"); }
+                                                else
+                                                    xenix_log_note("[xenix-pf-2to4] state2->4 transition: got 0x55, CMDLine=0");
                                                 P->indexread=4;         // start at offset 4
                                                 P->indexwrite=4;        // (4 byte preable reserved for status for lisa to read later
                                                 return;
@@ -975,8 +1063,10 @@ if (!EVENT_WRITE_NUL)
 
                     // On Xenix, occasional 0xff reads here are a floating-bus artifact during handshake;
                     // coerce to 0x55 so the following CMD-low edge can complete the handshake.
+                    // xenix_idle_pf_compat_enabled() covers both the running kernel and the
+                    // pre-kernel bootloader phase (LISA_ROM_RUNNING / UNKNOWN_OS_RUNNING).
                     if (P->VIA_PA==0xff && EVENT_WRITE_ORA &&
-                        (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                        xenix_idle_pf_compat_enabled())
                                                 {
                                                   P->VIA_PA=0x55;
                                                   SET_PROFILE_LOOP_TIMEOUT(TENTH_OF_A_SECOND);
@@ -1012,14 +1102,17 @@ case GET_CMDBLK_STATE:           // 4          // now copy command bytes into co
          }
 
          CHECK_PROFILE_LOOP_TIMEOUT;
-         
-            if ( (running_lisa_os==LISA_UNIPLUS_RUNNING || running_lisa_os == LISA_UNIPLUS_SUNIX_RUNNING || running_lisa_os == LISA_XENIX_RUNNING) && 
-              (TIMEPASSED_PROFILE_LOOP( (HUN_THOUSANDTH_OF_A_SEC/1000)) ) ) {
+
+            if ( xenix_idle_pf_compat_enabled() ) {
+              { char _n4[80]; snprintf(_n4,sizeof(_n4),"[xenix-pf-4] entered state4 BSYLine=%d idxw=%d",P->BSYLine,P->indexwrite); xenix_log_note(_n4); }
+              if (!P->BSYLine) xenix_log_note("[xenix-pf-4] compat: generating BSYLine 0->1 edge");
+              P->BSYLine=1;
+            }
+         else if ( (running_lisa_os==LISA_UNIPLUS_RUNNING || running_lisa_os == LISA_UNIPLUS_SUNIX_RUNNING || running_lisa_os == LISA_XENIX_RUNNING) &&
+              (TIMEPASSED_PROFILE_LOOP( (HUN_THOUSANDTH_OF_A_SEC/10)) ) ) {
               DEBUG_LOG(0,"UniPlus/Xenix OS, faking BSYLine=1");
               SET_PROFILE_LOOP_NO_PREDELAY(TENTH_OF_A_SECOND); 
-              via[P->vianum].via[IFR] |=VIA_IRQ_BIT_CA1;
-              FIX_VIA_IFR(P->vianum);
-              P->BSYLine=1; return;
+              P->BSYLine=1;
           }
          else 
             if (P->BSYLine!=2) {         // wait a bit before flopping busy, but if Lisa sends a byte, accept it
@@ -1088,23 +1181,37 @@ case GET_CMDBLK_STATE:           // 4          // now copy command bytes into co
                                       (P->DataBlock[7]    ) ;
 
                           DEBUG_LOG(0,"In 4b. Lisa raised CMDLine, might go to step 5. blk#%d",blocknumber);
+                          { char _n[96]; snprintf(_n,sizeof(_n),"[xenix-pf-4b] state4b reached cmd=%02x blk=%d idxw=%d bsy=%d",P->DataBlock[4],blocknumber,P->indexwrite,P->BSYLine); xenix_log_note(_n); }
 
                           switch (P->DataBlock[4])
                           {                                     //20060515-P->BSYLINE=0 replaced with 1
                               case 0 : P->VIA_PA=0x02; P->last_a_accs=0; P->BSYLine=1; DEBUG_LOG(0,"4b: ACK READ");          // read block
                                        P->StateMachineStep=WAIT_2nd_0x55_STATE;
                                        SET_PROFILE_LOOP_NO_PREDELAY(HALF_OF_A_SECOND);
+                                       // patchxenix bootloader is interrupt-driven: reads VIA_PA only when CA1 BSY IRQ fires.
+                                       // With xenix_idle_pf_compat_enabled(), BSYLine was already 1 through state 4, so the
+                                       // BSYLine=1 above generates no 0->1 edge. Reset to 0 here so state 5's BSYLine=1
+                                       // generates the IRQ edge the bootloader ISR needs to read the ACK byte.
+                                       if (xenix_idle_profile_compat &&
+                                           (running_lisa_os == LISA_ROM_RUNNING || running_lisa_os == UNKNOWN_OS_RUNNING))
+                                          { P->BSYLine=0; xenix_log_note("[xenix-pf-bsy] state4b: BSY reset to 0 for bootloader IRQ edge (READ)"); }
                                        return;
 
 
                               case 1 : P->VIA_PA=0x03; P->last_a_accs=0; P->BSYLine=1; DEBUG_LOG(0,"4b: ACK WRITE");         // write block
                                        P->StateMachineStep=WAIT_2nd_0x55_STATE;
                                        SET_PROFILE_LOOP_NO_PREDELAY(HALF_OF_A_SECOND);
+                                       if (xenix_idle_profile_compat &&
+                                           (running_lisa_os == LISA_ROM_RUNNING || running_lisa_os == UNKNOWN_OS_RUNNING))
+                                          { P->BSYLine=0; xenix_log_note("[xenix-pf-bsy] state4b: BSY reset to 0 for bootloader IRQ edge (WRITE)"); }
                                        return;
 
                               case 2 : P->VIA_PA=0x04; P->last_a_accs=0; P->BSYLine=1; DEBUG_LOG(0,"4b: ACK WRITE/VERIFY");  // write/verify block
                                        P->StateMachineStep=WAIT_2nd_0x55_STATE;
                                        SET_PROFILE_LOOP_NO_PREDELAY(HALF_OF_A_SECOND);
+                                       if (xenix_idle_profile_compat &&
+                                           (running_lisa_os == LISA_ROM_RUNNING || running_lisa_os == UNKNOWN_OS_RUNNING))
+                                          { P->BSYLine=0; xenix_log_note("[xenix-pf-bsy] state4b: BSY reset to 0 for bootloader IRQ edge (WRITE/VERIFY)"); }
                                        return;
 
                               default: P->VIA_PA=0x00; P->BSYLine=0;
@@ -1137,10 +1244,19 @@ case GET_CMDBLK_STATE:           // 4          // now copy command bytes into co
                 P->VIA_PA);
          #endif
 
+         { static int s5_bsy_logged=0;
+           if (!P->BSYLine && !s5_bsy_logged) { xenix_log_note("[xenix-pf-5] state5: BSYLine=0, about to assert 0->1 edge"); s5_bsy_logged=1; }
+           else if (P->BSYLine) s5_bsy_logged=0;
+         }
          P->BSYLine=1; //2006.05.09 was 0
          if (EVENT_WRITE_NUL) return;
          if (EVENT_WRITE_ORA) //  && P->last_a_accs && P->CMDLine && P->RRWLine)
-            {      DEBUG_LOG(0,"State:5: checking what we got:%02x==0x55",P->VIA_PA);
+            {      { char _s5[96]; snprintf(_s5,sizeof(_s5),"[xenix-pf-5] state5 EVENT_WRITE_ORA pa=%02x cmd=%d rrw=%d",P->VIA_PA,P->CMDLine,P->RRWLine); xenix_log_note(_s5); }
+                   if (xenix_idle_pf_compat_enabled() && P->VIA_PA==0xff)
+                     {
+                       P->VIA_PA=0x55;
+                       xenix_log_note("[xenix-pf-ff] state5 coerced 0xff->0x55");
+                     }
                    if (P->VIA_PA==0x55)   {
                                           P->StateMachineStep=PARSE_CMD_STATE;
                                           SET_PROFILE_LOOP_TIMEOUT(HALF_OF_A_SECOND);
@@ -1163,7 +1279,7 @@ case GET_CMDBLK_STATE:           // 4          // now copy command bytes into co
          // insert sound play some profile seeking sounds now?
          //CHECK_PROFILE_LOOP_TIMEOUT;
 
-         if ( !TIMEPASSED_PROFILE_LOOP(HUN_THOUSANDTH_OF_A_SEC) ) //2021.08.24 - disabling this: && P->DataBlock[4]==0)  // this block was disabled 2021.06.15 added && P->DataBlock[4]
+         if ( !xenix_idle_pf_compat_enabled() && !TIMEPASSED_PROFILE_LOOP(HUN_THOUSANDTH_OF_A_SEC) ) //2021.08.24 - disabling this: && P->DataBlock[4]==0)  // this block was disabled 2021.06.15 added && P->DataBlock[4]
               {
                 DEBUG_LOG(0,"State:6 - wasting cycles for a bit to simulate a busy profile (%d cycles)",PROFILE_WAIT_EXEC_CYCLE);
                 return;
@@ -1307,7 +1423,7 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
           if (EVENT_WRITE_ORA)
              {
               if (P->VIA_PA==0xff &&
-                  (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                  (running_lisa_os==LISA_XENIX_RUNNING))
                 {
                   P->VIA_PA=0x55;
                   xenix_log_note("[xenix-pf-ff] state8 coerced 0xff->0x55");
@@ -1418,7 +1534,7 @@ case WAIT_3rd_0x55_STATE:              // 8    // wait for 0x55 again
          CHECK_PROFILE_LOOP_TIMEOUT;
          if (EVENT_WRITE_NUL) return;
 
-         if (!P->CMDLine)
+         if (!P->CMDLine || xenix_idle_pf_compat_enabled())  // Xenix keeps CMD asserted during data phase
          {
 
             P->BSYLine=0;            //2006.05.15

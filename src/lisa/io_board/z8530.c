@@ -65,6 +65,8 @@
 
 #include <unistd.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <string.h>
 
 
 
@@ -86,15 +88,70 @@ int irq_on_next_rx_char[2];
 static  int sentbytes[2];
 static  XTIMER sentbytes_start[2];
 static FILE *xenix_tty_log=NULL;
+static int xenix_tty_log_path_reported=0;
+static int xenix_tty_log_open_failure_reported=0;
+static char xenix_tty_log_path[4096];
+
+static const char *xenix_tty_log_dir(void)
+{
+    const char *envdir=getenv("LISAEM_TMPDIR");
+    return (envdir && envdir[0]) ? envdir : ".tmp";
+}
+
+static const char *xenix_get_tty_log_path(void)
+{
+    if (!xenix_tty_log_path[0])
+      snprintf(xenix_tty_log_path,sizeof(xenix_tty_log_path),
+               "%s/%s",xenix_tty_log_dir(),"lisaem-xenix-tty.txt");
+    return xenix_tty_log_path;
+}
+
+static void xenix_tty_report_log_path_once(void)
+{
+    char cwd[2048];
+    const char *dir="<unknown>";
+    if (getcwd(cwd,sizeof(cwd))) dir=cwd;
+    if (!xenix_tty_log_path_reported)
+    {
+      fprintf(stderr,"[xenix-tty-log] local path=%s cwd=%s\n",xenix_get_tty_log_path(),dir);
+      fflush(stderr);
+      xenix_tty_log_path_reported=1;
+    }
+}
+
+static void xenix_tty_report_open_failure_once(const char *op, const char *path)
+{
+    char cwd[2048];
+    const char *dir="<unknown>";
+    int saved_errno=errno;
+    if (getcwd(cwd,sizeof(cwd))) dir=cwd;
+    if (!xenix_tty_log_open_failure_reported)
+    {
+      fprintf(stderr,"[xenix-tty-log] %s failed for %s errno=%d (%s) cwd=%s\n",
+              op,path,saved_errno,strerror(saved_errno),dir);
+      fflush(stderr);
+      xenix_tty_log_open_failure_reported=1;
+    }
+}
 
 static void scc_log_xenix_tty(uint8 port, uint8 data)
 {
     if (running_lisa_os!=LISA_XENIX_RUNNING) return;
     if (!xenix_tty_log)
     {
-      (void)mkdir(".tmp",0777);
-      xenix_tty_log=fopen(".tmp/lisaem-xenix-tty.txt","w");
-      if (!xenix_tty_log) return;
+      const char *logdir=xenix_tty_log_dir();
+      const char *logpath=xenix_get_tty_log_path();
+      xenix_tty_report_log_path_once();
+      errno=0;
+      if (mkdir(logdir,0777)!=0 && errno!=EEXIST)
+        xenix_tty_report_open_failure_once("mkdir",logdir);
+      errno=0;
+      xenix_tty_log=fopen(logpath,"w");
+      if (!xenix_tty_log)
+      {
+        xenix_tty_report_open_failure_once("fopen",logpath);
+        return;
+      }
       fprintf(xenix_tty_log,"# LisaEm Xenix SCC tty capture\n");
     }
     if (data==9 || data==10 || data==13 || (data>=32 && data<127))

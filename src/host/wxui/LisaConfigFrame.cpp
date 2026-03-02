@@ -780,12 +780,8 @@ wxScrolledWindow *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
 
     wxString ramsize[] = { wxT("0.5 MB"), wxT("1 MB"), wxT("1.5 MB"),  wxT("2 MB*") };
 
-  cpurambox = new wxRadioBox(panel, wxID_ANY,wxT("RAM:"), wxDefaultPosition, wxDefaultSize, 
-    #ifdef ALLOW2MBRAM
-          4, // 3 to turn off 2mb// 4 - to -reneable 2MB, uncomment case 2048 below as well
-    #else
-          3,
-    #endif
+  cpurambox = new wxRadioBox(panel, wxID_ANY,wxT("RAM:"), wxDefaultPosition, wxDefaultSize,
+          4,
        ramsize, 0, wxRA_SPECIFY_COLS,
        wxDefaultValidator, wxT("radioBox"));
     root->Add(cpurambox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
@@ -796,10 +792,8 @@ wxScrolledWindow *LisaConfigFrame::CreateMainConfigPage(wxNotebook *parent)
      case  512:  cpurambox->SetSelection(0); break;
      case 1024:  cpurambox->SetSelection(1); break;
      case 1536:  cpurambox->SetSelection(2); break;
-     #ifdef ALLOW2MBRAM
      case 2048:  cpurambox->SetSelection(3); break;
-     #endif
-     default:    cpurambox->SetSelection(2); 
+     default:    cpurambox->SetSelection(2);
     }
 
    // doesn't work yet

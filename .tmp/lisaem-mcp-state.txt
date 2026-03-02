@@ -1,0 +1,8 @@
+reason=command
+message=dumped 752 bytes from 000a4150
+running=1
+power=1
+pc=00022d4c
+clock=0000001425e3c02d
+mouse=0,0
+commands=status|power|shutdown|quit|force-shutdown|pause|run|apple1|apple2|apple3|move x y|click x y|text <ascii>|keycode <hex|dec>|dump <addr> <len>|find <hex>|help

@@ -17,4 +17,7 @@
 #define IN_VARS_C 1
 #include <vars.h>
 
+// Keep this TU dirty when new GLOBAL vars are introduced in vars.h so incremental builds
+// recompile vars.o and export new symbols (e.g. xenix_idle_profile_compat).
+
 /////////////////////////////////////////////////////////////////////////////////////////

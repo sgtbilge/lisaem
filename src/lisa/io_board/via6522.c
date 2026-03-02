@@ -39,13 +39,15 @@
 
 
 #define FIX_VIA_IFR(vianum)  {                                                               \
-                               if ( via[vianum].via[IFR] & 127) via[vianum].via[IFR]|=128;   \
-                               else via[vianum].via[IFR]=0;                                  \
+                               if ( (via[vianum].via[IFR] & 127) & (via[vianum].via[IER] & 127) ) \
+                                    via[vianum].via[IFR]|=128;                               \
+                               else via[vianum].via[IFR] &= 127;                             \
                              }
 
 #define FIX_VIAP_IFR()       {                                                               \
-                               if ( V->via[IFR] & 127) V->via[IFR]|=128;                     \
-                               else V->via[IFR]=0;                                           \
+                               if ( (V->via[IFR] & 127) & (V->via[IER] & 127) )              \
+                                    V->via[IFR]|=128;                                        \
+                               else V->via[IFR] &= 127;                                      \
                               }
 
 
@@ -101,7 +103,8 @@ void set_crdy_line(void) { via[1].via[IRB] |=64; DEBUG_LOG(0,"IRB=%02x",via[1].v
 void clr_crdy_line(void) { via[1].via[IRB] &=(255-64); DEBUG_LOG(0,"IRB=%02x",via[1].via[IRB]);}
 int  is_crdy_line(void)  { return via[1].via[IRB] & 64; }
 
-void set_kb_data_ready(void) {if (via[1].via[IER] &2) via[1].via[IFR]|=VIA_IRQ_BIT_CA1;
+void set_kb_data_ready(void) {via[1].via[IFR]|=VIA_IRQ_BIT_CA1; // real 6522: IFR set unconditionally; IER only gates IRQ assertion
+                             FIX_VIA_IFR(1);
                              if (cops_event<0) SET_COPS_NEXT_EVENT(0);}
 
 
@@ -592,8 +595,9 @@ void  via2_ora(uint8 data, uint8 regnum)
     VIA_CLEAR_IRQ_PORT_A(2); // clear CA1/CA2 on ORA/IRA access
     via[2].last_pa_write=cpu68k_clocks;
     DEBUG_LOG(0,"ORA:%02x DDRA:%02x   ORB:%02x DDRB:%0x",via[2].via[ORA],via[2].via[DDRA],via[2].via[ORB],via[2].via[DDRB]);
+    // ProFile handshakes can legitimately write ORA while DDRA is input; Idle accepts this.
     if (via[2].via[DDRA]==0 &&
-        !(via[2].ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))) return;    // can't write just yet, ignore.
+        !(via[2].ProFile)) return;    // can't write just yet, ignore.
     if ( check_contrast_set()) return;
 
     if (via[2].via[ORBB] & via[2].via[DDRB] & 4) return;    // driver enable is off, don't process ADMP/Profile data output.
@@ -1223,6 +1227,10 @@ write to register
             if   (xvalue & 0x80)  via[1].via[IER] |= xvalue;
             else                  via[1].via[IER] &=(0x7f^( xvalue & 0x7f));
 
+            // clear out anything that IER has disabled on the write.  2020.11.06
+            via[1].via[IFR] &= via[1].via[IER];
+            FIX_VIA_IFR(1);
+
             DEBUG_LOG(0,"VIA1 IER Write:%02x::%s %s %s %s %s %s %s %s\n",xvalue,
             (xvalue & VIA_IRQ_BIT_CA2        ) ? "CA2":"",
             (xvalue & VIA_IRQ_BIT_CA1        ) ? "CA1":"",
@@ -1344,11 +1352,7 @@ uint8 lisa_rb_Oxdc00_cops_via1(uint32 addr)
 
 
         case IFR1   : DEBUG_LOG(0,"IFR COPS: SRC: copsqueuelen=%d",copsqueuelen);
-                      // via1_ifr bit1 (2) is data in cops queue indicator
-
-                      if (copsqueuelen>0 || (mousequeuelen>0 && cops_mouse>0))
-                            via[1].via[IFR] |= VIA_IRQ_BIT_CA1;
-                      else  via[1].via[IFR] &=~VIA_IRQ_BIT_CA1;
+                      // Keep CA1 edge-latched; do not force it from queue state during IFR reads.
 
                       #ifdef DEBUG
                       DEBUG_LOG(0,"COPS-IFR SRC: returning %02x, copsqueuelen:%d, mousequeuelen:%d",via[1].via[IFR],copsqueuelen,mousequeuelen);
@@ -1473,7 +1477,7 @@ void lisa_wb_Oxd800_par_via2(uint32 addr, uint8 xvalue)
             if ( !via[2].via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        via[2].orapending=1;
                                        DEBUG_LOG(0,"ORANH: Not writing %02x now, but setting pending since DDRA=0",xvalue);
-                                       if (via[2].ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                       if (via[2].ProFile)
                                           via2_ora(via[2].via[ORAA],15);
                                        return;
                                     }
@@ -1496,7 +1500,7 @@ void lisa_wb_Oxd800_par_via2(uint32 addr, uint8 xvalue)
 
             if ( !via[2].via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        via[2].orapending=1;
-                                       if (via[2].ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                       if (via[2].ProFile)
                                           via2_ora(via[2].via[ORAA],ORA);
                                        return;
                                     }
@@ -1976,8 +1980,7 @@ uint8 lisa_rb_Oxd800_par_via2(uint32 addr)
                       if (via[2].ProFile)
                       {
 
-                        if ( via[2].ProFile->BSYLine) via[2].via[IFR] |=(    VIA_IRQ_BIT_CA1);
-                        //20060526-bug here// else                          via[2].via[IFR] &=(255-VIA_IRQ_BIT_CA1);
+                        // Keep CA1 edge-latched; do not force it from instantaneous BSY level.
 
                         //20060525// via[2].via[IFR]|=8; -- do not enable this.       // Parity Error=true
                          via[2].via[IFR] &=~VIA_IRQ_BIT_CB2;            //20060525 - want this one  // Parity Error=false
@@ -2040,8 +2043,9 @@ void  viaX_ora(viatype *V,uint8 data, uint8 regnum)
     VIA_CLEAR_IRQ_PORT_A(V->vianum); // clear CA1/CA2 on ORA/IRA access
     V->last_pa_write=cpu68k_clocks;
     DEBUG_LOG(0,"VIA:%D ORA:%02x DDRA:%02x   ORB:%02x DDRB:%0x",V->vianum,V->via[ORA],V->via[DDRA],V->via[ORB],V->via[DDRB]);
+    // ProFile handshakes can legitimately write ORA while DDRA is input; Idle accepts this.
     if (V->via[DDRA]==0 &&
-        !(V->ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))) return;    // can't write just yet, ignore.
+        !(V->ProFile)) return;    // can't write just yet, ignore.
     if (V->vianum==2) {if ( check_contrast_set()) return;}
 
     if (V->via[ORBB] & V->via[DDRB] & 4) return;    // driver enable is off, don't process ADMP/Profile data output.
@@ -2402,8 +2406,7 @@ uint8 lisa_rb_ext_2par_via(ViaType *V,uint32 addr)
                       if (V->ProFile)
                       {
 
-                        if ( V->ProFile->BSYLine) V->via[IFR] |=(    VIA_IRQ_BIT_CA1);
-                        //20060526-bug here// else                          V->via[IFR] &=(255-VIA_IRQ_BIT_CA1);
+                        // Keep CA1 edge-latched; do not force it from instantaneous BSY level.
 
                         //20060525// V->via[IFR]|=8; -- do not enable this.       // Parity Error=true
                          V->via[IFR] &=~VIA_IRQ_BIT_CB2;            //20060525 - want this one  // Parity Error=false
@@ -2518,7 +2521,7 @@ void lisa_wb_ext_2par_via(ViaType *V,uint32 addr, uint8 xvalue)
             if ( !V->via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        V->orapending=1;
                                        DEBUG_LOG(0,"ORANH: Not writing %02x now, but setting pending since DDRA=0",xvalue);
-                                       if (V->ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                       if (V->ProFile)
                                           viaX_ora(V,V->via[ORAA],15);
                                        return;
                                 }
@@ -2539,7 +2542,7 @@ void lisa_wb_ext_2par_via(ViaType *V,uint32 addr, uint8 xvalue)
 
             if ( !V->via[DDRA]) {  // don't write anything if the DDRA is all inputs
                                        V->orapending=1;
-                                       if (V->ProFile && (running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481))
+                                       if (V->ProFile)
                                           viaX_ora(V,V->via[ORAA],ORA);
                                        return;
                                     }
@@ -2806,8 +2809,7 @@ void lisa_wb_ext_2par_via(ViaType *V,uint32 addr, uint8 xvalue)
             //V->via[IFR]&=(0x7f^(xvalue & 0x7f));  // 1 writes to IFR are used to clear bits!
               V->via[IFR]&=~(xvalue);  // 1 writes to IFR are used to clear bits!
 
-            if ( V->via[IFR] & 127) V->via[IFR]|=128;   // if all are cleared, clear bit 7 else set it
-            else V->via[IFR]=0;
+            FIX_VIAP_IFR();   // if all are cleared, clear bit 7 else set it
 
             DEBUG_LOG(0,"IFR write bits: %s %s %s %s %s %s %s %s",
                            (V->via[IFR] &   1) ? "ifr0CA2:on"              :"ifr0CA2:off",
@@ -2830,8 +2832,7 @@ void lisa_wb_ext_2par_via(ViaType *V,uint32 addr, uint8 xvalue)
 
             // clear out anything that IER has disabled on the write.  2020.11.06
             V->via[IFR] &= V->via[IER];
-            if ( V->via[IFR] & 127) V->via[IFR]|=128;   // if all are cleared, clear bit 7 else set it
-            else V->via[IFR]=0;
+            FIX_VIAP_IFR();   // if all are cleared, clear bit 7 else set it
 
 
             // from via 1// if bit 7=0, then all 1 bits are reversed. 1=no irq, 0=irq enabled.

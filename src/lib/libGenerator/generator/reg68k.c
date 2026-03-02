@@ -572,7 +572,7 @@ static void xenix_probe_vector_event(uint32 vno, uint32 oldpc, uint32 addr_error
 {
     static int v3_stop_armed=1;
     static XTIMER v3_stop_last_clock=0;
-    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+    if (!(running_lisa_os==LISA_XENIX_RUNNING)) return;
     if (vno==32) return;
     if (cpu68k_clocks < v3_stop_last_clock) v3_stop_armed=1;
     v3_stop_last_clock=cpu68k_clocks;
@@ -677,7 +677,7 @@ static void xenix_probe_vector_event(uint32 vno, uint32 oldpc, uint32 addr_error
 
 static void xenix_probe_vector_text(uint32 vno, uint32 oldpc)
 {
-    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+    if (!(running_lisa_os==LISA_XENIX_RUNNING)) return;
     if (vno==32) return; // trap #0 is handled by xenix_probe_trap0_write
 
     static uint32 vector_seen=0;
@@ -728,7 +728,7 @@ static void xenix_probe_vector_text(uint32 vno, uint32 oldpc)
 
 static void xenix_probe_trap0_write(uint32 oldpc, uint32 usp)
 {
-    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+    if (!(running_lisa_os==LISA_XENIX_RUNNING)) return;
     int saved_abort=abort_opcode;
     uint8 saved_fc=CPU_function_code;
     CPU_function_code=1; // user data space
@@ -1064,11 +1064,11 @@ int get_exs2_pending_irq_2xpar(void) { if (via[7].via[IFR]&via[7].via[IER]) via[
 int get_irq1_pending_irq(void )
 {
             // this is just a fixup for the COPS VIA, doesn't affect the rest of this.
-            if (!!(via[1].via[IER] & via[1].via[IFR] & 0x7f)) via[1].via[IFR] |=0x80; else  via[1].via[IFR] &=0x7f;
+            FIX_VIA_IFR(1);
 
             // IRQ1 is the only shared IRQ - Vertical Retrace, Floppy FDIR, and VIA2 (Parallel Port) all use it.
             // fix via IFR bit 0x80's so bit 7 is properly reflecting enabled IRQ's.  Correct these bits before checking.
-            if (!!(via[2].via[IER] & via[2].via[IFR] & 0x7f)) via[2].via[IFR] |=0x80; else  via[2].via[IFR] &=0x7f;
+            FIX_VIA_IFR(2);
 
             DEBUG_LOG(0,"IRQ1: vertical:%d fdir:%d VIA2-IFR bits:%s%s%s%s%s%s%s%s returning:%d",
                (verticallatch && (videoirq & 1)), floppy_FDIR ,
@@ -1098,13 +1098,12 @@ int get_irq1_pending_irq(void )
 static inline int get_cops_pending_irq(void )
 {
      // bit 7 of IFR indicates whether any VIA1 IRQ's have been fired, so check to see if any of them have, then set bit 7
-     if (via[1].via[IER] & via[1].via[IFR] & 0x7f)
+     FIX_VIA_IFR(1);
+     if (via[1].via[IFR] & 0x80)
      {
-       via[1].via[IFR] |=0x80;
        return 0x80;
      }
 
-     via[1].via[IFR] &=0x7f;
      return 0;
 }
 
@@ -1119,15 +1118,16 @@ static inline uint8 get_pending_vector(void)
   //---- recalculated pending vector bitmap, and find the highest IRQ to be serviced  ------------
   // 2021.03.29 skip lower tests when mask is high, all it does is slow emulation down and then
   // it fills the log with tons of noise.
-  if (get_nmi_pending_irq()  ) {highest=7; pending_vector_bitmap=BIT7; }   if (mask==7) return highest;
-  if (get_scc_pending_irq()  ) {highest=6; pending_vector_bitmap=BIT6; }   if (mask==6) return highest;
-  if (get_exs0_pending_irq() ) {highest=5; pending_vector_bitmap=BIT5; }   if (mask==5) return highest;
-  if (get_exs1_pending_irq() ) {highest=4; pending_vector_bitmap=BIT4; }   if (mask==4) return highest;
-  if (get_exs2_pending_irq() ) {highest=3; pending_vector_bitmap=BIT3; }   if (mask==3) return highest;
-  if (get_cops_pending_irq() ) {highest=2; pending_vector_bitmap=BIT2; }   if (mask==2) return highest;
-  if (get_irq1_pending_irq() ) {highest=1; pending_vector_bitmap=BIT1; }   
+  if (get_nmi_pending_irq()  ) {highest=7; pending_vector_bitmap=BIT7; }   if (highest==7) return 7; // NMI always fires on 68000 regardless of mask.
 
-  return highest;
+  if (get_scc_pending_irq()  ) {highest=6; pending_vector_bitmap=BIT6; }   if (mask<6 && highest>mask) return highest;
+  if (get_exs0_pending_irq() ) {highest=5; pending_vector_bitmap=BIT5; }   if (mask<5 && highest>mask) return highest;
+  if (get_exs1_pending_irq() ) {highest=4; pending_vector_bitmap=BIT4; }   if (mask<4 && highest>mask) return highest;
+  if (get_exs2_pending_irq() ) {highest=3; pending_vector_bitmap=BIT3; }   if (mask<3 && highest>mask) return highest;
+  if (get_cops_pending_irq() ) {highest=2; pending_vector_bitmap=BIT2; }   if (mask<2 && highest>mask) return highest;
+  if (get_irq1_pending_irq() ) {highest=1; pending_vector_bitmap=BIT1; }   if (mask<1 && highest>mask) return highest;
+
+  return 0;
 }
 
 #ifdef DEBUG

@@ -73,6 +73,7 @@ enum
     ID_RAWKBBUF,
 
     ID_EMULATION_TIMER,
+    ID_RESIZE_DEBOUNCE_TIMER,
 
     ID_THROTTLE1,
     ID_THROTTLE5,
@@ -238,6 +239,7 @@ public:
 
     //void OnIdleEvent(wxIdleEvent& event);
     void OnEmulationTimer(wxTimerEvent& event);
+    void OnResizeDebounceTimer(wxTimerEvent& event);
     void OnSize(wxSizeEvent& event);
 
     void OnPasteToKeyboard(wxCommandEvent&event);
@@ -381,6 +383,7 @@ public:
     XTIMER cycles_wanted;
 
     wxTimer* m_emulation_timer;
+    wxTimer* m_resize_timer;
     int barrier;
 
     DECLARE_EVENT_TABLE()

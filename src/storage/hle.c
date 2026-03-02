@@ -34,7 +34,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <reg68k.h>
 #include <cpu68k.h>
@@ -68,7 +70,52 @@ static int xenix_console_initialized=0;
 static uint32 xenix_last_unhandled_pc=0xffffffff;
 static uint32 xenix_putchar_pc=0xffffffff;
 static FILE *xenix_text_log=NULL;
+static int xenix_log_path_reported=0;
+static int xenix_log_open_failure_reported=0;
+static char xenix_console_log_path[4096];
 void xenix_log_note(const char *msg);
+
+static const char *xenix_log_dir(void)
+{
+    const char *envdir=getenv("LISAEM_TMPDIR");
+    return (envdir && envdir[0]) ? envdir : ".tmp";
+}
+
+static const char *xenix_get_console_log_path(void)
+{
+    if (!xenix_console_log_path[0])
+      snprintf(xenix_console_log_path,sizeof(xenix_console_log_path),
+               "%s/%s",xenix_log_dir(),"lisaem-xenix-console.txt");
+    return xenix_console_log_path;
+}
+
+static void xenix_report_log_path_once(void)
+{
+    char cwd[2048];
+    const char *dir="<unknown>";
+    if (getcwd(cwd,sizeof(cwd))) dir=cwd;
+    if (!xenix_log_path_reported)
+    {
+      fprintf(stderr,"[xenix-log] local path=%s cwd=%s\n",xenix_get_console_log_path(),dir);
+      fflush(stderr);
+      xenix_log_path_reported=1;
+    }
+}
+
+static void xenix_report_log_open_failure_once(const char *op, const char *path)
+{
+    char cwd[2048];
+    const char *dir="<unknown>";
+    int saved_errno=errno;
+    if (getcwd(cwd,sizeof(cwd))) dir=cwd;
+    if (!xenix_log_open_failure_reported)
+    {
+      fprintf(stderr,"[xenix-log] %s failed for %s errno=%d (%s) cwd=%s\n",
+              op,path,saved_errno,strerror(saved_errno),dir);
+      fflush(stderr);
+      xenix_log_open_failure_reported=1;
+    }
+}
 
 static void xenix_close_logs(void)
 {
@@ -79,12 +126,19 @@ static void xenix_open_logs(void)
 {
     if (!xenix_text_log)
     {
-      (void)mkdir(".tmp",0777);
-      xenix_text_log=fopen(".tmp/lisaem-xenix-console.txt","w");
+      const char *logdir=xenix_log_dir();
+      const char *logpath=xenix_get_console_log_path();
+      xenix_report_log_path_once();
+      errno=0;
+      if (mkdir(logdir,0777)!=0 && errno!=EEXIST)
+        xenix_report_log_open_failure_once("mkdir",logdir);
+      errno=0;
+      xenix_text_log=fopen(logpath,"w");
       if (xenix_text_log) {
         setvbuf(xenix_text_log,NULL,_IONBF,0);
         fprintf(xenix_text_log,"# LisaEm Xenix console capture\n");
       }
+      else xenix_report_log_open_failure_once("fopen",logpath);
     }
 }
 
@@ -118,7 +172,7 @@ static uint32 xenix_find_putchar_pc(void)
 
 void xenix_probe_stdout_candidate(uint32 pc, uint16 opcode)
 {
-    if (!(running_lisa_os==LISA_XENIX_RUNNING || bootblockchecksum==0x4e1ae481)) return;
+    if (!(running_lisa_os==LISA_XENIX_RUNNING)) return;
 
     // Probe common putchar argument fetch shapes:
     // MOVE.B (A6),Dn / (A7),Dn / (A6)+,(A7)+ and d16(A6|A7),Dn

@@ -1105,9 +1105,14 @@ uint8 via1_ira(uint8 regnum)
     // if there are no keystrokes pending, send mouse events.
     if ( copsqueuelen<=0)
     {
-        DEBUG_LOG(0,"copsqueuelen=%d so sending mouse events.",copsqueuelen);
+        DEBUG_LOG(0,"copsqueuelen=%d so checking pending mouse events.",copsqueuelen);
         copsqueuelen=0;
 
+        if (!(mouse_pending_x|mouse_pending_y))
+        {
+            DEBUG_LOG(0,"IRA1: queue empty and no pending mouse delta");
+            return 0x00;
+        }
 
         DEBUG_LOG(0,"IRA1: since COPS queue<=0 (%d), will send mouse delta X,Y:[0x00],%d,%d",copsqueuelen,mouse_pending_x,mouse_pending_y);
 

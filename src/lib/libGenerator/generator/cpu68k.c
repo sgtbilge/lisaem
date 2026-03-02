@@ -954,7 +954,7 @@ t_ipc_table *get_ipct(uint32 address)
       ipct[0].ipc[j].used=0; 
       ipct[0].ipc[j].set=0;
       ipct[0].ipc[j].opcode=0xf33f;
-      ipct[0].ipc[j].src=0; ipct[i].ipc[j].dst=0; 
+      ipct[0].ipc[j].src=0; ipct[0].ipc[j].dst=0;
     }
     #endif
     //check_ipct_counts(__FUNCTION__,__LINE__);
@@ -1059,6 +1059,7 @@ t_ipc_table *cpu68k_makeipclist(uint32 pc) {
         if (pc&1) EXITR(14,NULL,"odd pc!");
         #endif
 
+        table=mmu_trn->table;
         ipc = &(table->ipc[((pc>>1) & 0xff)]);
         DEBUG_LOG(200,"ipc is now %p at pc %08lx max %08lx",ipc,(long)pc,(long)xpc);
         if (!ipc) {EXITR(501,NULL,"cpu68k_makeipclist: But! ipc is null!"); }
@@ -1110,21 +1111,11 @@ t_ipc_table *cpu68k_makeipclist(uint32 pc) {
 
         // grow the list of ipcs if we need to.
         if (instrs>=ipcs_to_get)  {
-          uint32 opc=original_pc & ADDRESSFILT;
-          int count=0;
-          ALERT_LOG(0,"=============== FATAL ERROR: Welcome to the Realms of Chaos ===============================================");
-          ALERT_LOG(0,"Entered at: %08x",original_pc);
-          while (opc<pc)  {
-            abort_opcode=2; opcode=fetchword(pc); printf("%04x ",opcode); opc++; count++; if (count>15) {count=0; printf("\n%08x: ",opc);}
-          }
-          #ifdef DEBUG
-            ALERT_LOG(0,"dumpallmmu"); debug_on("chaos"); dumpram("chaos"); dumpallmmu(); debug_off(); ALERT_LOG(0,"MMU dump completed");
-          #else
-            ALERT_LOG(0,"\n\n\nDebug has not been compiled in, cannot dump mmu\n\n\n");
-          #endif
-          EXITR(24,NULL,"Welcome to the realms of chaos! I'm dealing with over %ld instructions in a basic block, this should not happen, %ld ipcs! %ld/%ld/%ld pc=%ld/%08lx",
-                    (long)instrs,(long)ipcs_to_get,(long)segment1,(long)segment2,(long)start,(long)context,(long)pc);
-          exit(255);
+          ALERT_LOG(0,"WARNING: basic block too large (%ld instrs) at pc=%08lx - truncating",(long)instrs,(long)original_pc);
+          // Store current ipc and end the block here so execution can continue.
+          ipcs[instrs-1]=ipc;
+          ipc->next=NULL;
+          break;
         }
 
         DEBUG_LOG(200,"Copying ipc to ipcs buffer");

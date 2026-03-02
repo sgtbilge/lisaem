@@ -365,6 +365,7 @@ void flag_via_t2_irq(int i)
 
    shift=(V->via[ACR] & 28)>>2;  // 4,5 for T2 expiration
    V->t2_e=-1; V->via[IFR] |= VIA_IRQ_BIT_T2; //  Set the IRQ flag for the VIA
+   FIX_VIAP_IFR();
    V->t2_fired++;
     #ifdef DEBUG
     latch=(V->via[T2CH]<<8)|(V->via[T2CL]);
@@ -400,6 +401,7 @@ void flag_via_t2_irq(int i)
       if (V->srcount<8) V->srcount++;
       if (V->srcount==8)
       {   V->via[IFR] |= VIA_IRQ_BIT_SR;// | (  (V->via[IER] &  VIA_IRQ_BIT_SR) ? VIA_IRQ_BIT_SET_CLR_ANY:0  );
+          FIX_VIAP_IFR();
           V->srcount=0; //++   // set it to 9 so we don't repeat until SR is re-accessed.
       }
 
@@ -413,12 +415,14 @@ void flag_via_t2_irq(int i)
        V->cb2=(V->via[SHIFTREG] & 0x80) ? 1:0;
        V->via[SHIFTREG]=(( (V->via[SHIFTREG]<<1) & 0xff)|loopbit);
        V->via[IFR] |= VIA_IRQ_BIT_SR|VIA_IRQ_BIT_SET_CLR_ANY;
+       FIX_VIAP_IFR();
 
        // mode5 (and 6, and 7) doesn't repeat
        if (V->srcount>8)                     // are we done with a full byte
            {
             if (V->srcount<9)                 // signal the IRQ if set that SR is done shifting (mode=5 hits this once)
-                      V->via[IFR] |= VIA_IRQ_BIT_SR|VIA_IRQ_BIT_SET_CLR_ANY;// | (  (V->via[IER] &  VIA_IRQ_BIT_SR) ? VIA_IRQ_BIT_SET_CLR_ANY:0  );
+                      {V->via[IFR] |= VIA_IRQ_BIT_SR|VIA_IRQ_BIT_SET_CLR_ANY;// | (  (V->via[IER] &  VIA_IRQ_BIT_SR) ? VIA_IRQ_BIT_SET_CLR_ANY:0  );
+                       FIX_VIAP_IFR();}
             if (shift==4) V->srcount=0;       // free running repeats
             if (shift==5) V->srcount=9;       // lock mode 5 from repeating and prevent future IRQ until SR reload
            }
@@ -452,8 +456,10 @@ void flag_via_t1_irq(int i)
     rate=(latch ? ((cpu68k_clocks-V->t1_set_cpuclk)/latch) : 0);
 
     V->t1_e=-1;  V->via[IFR] |= VIA_IRQ_BIT_T1;
+    FIX_VIAP_IFR();
     if (V->via[IER] &   VIA_IRQ_BIT_T1)
     {   V->via[IFR] |= (VIA_IRQ_BIT_T1 | VIA_IRQ_BIT_SET_CLR_ANY);  // any bit only set when IRQ is fired.
+        FIX_VIAP_IFR();
         DEBUG_LOG(0,"T1 Timer Via#%d IRQ:%d queued.",V->vianum,V->irqnum);
         //reg68k_external_autovector(V->irqnum);   // fire interrupt  //2021.03.21 moved to irq loop
 
@@ -838,6 +844,7 @@ void check_current_timer_irq(void)
        DEBUG_LOG(0,"(cops_event>0 is:%016llx   || copsqueuelen is %d)",cops_event,copsqueuelen);
 
        via[1].via[IFR] |= VIA_IRQ_BIT_CA1;
+       FIX_VIA_IFR(1);
 
      //  DEBUG_LOG(0,"queuing COPS [mouse timed irq:] copsqlen:%d  items, %d mouse items. mouse is:%d\n",
      //              copsqueuelen,mousequeuelen,cops_mouse);

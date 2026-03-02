@@ -27,6 +27,8 @@ if [[ "$?" -ne 0 ]]; then
 EOSCD
 exit 1
 fi
+export LISAEM_TMPDIR="$(pwd)/.tmp"
+mkdir -p "$LISAEM_TMPDIR" >/dev/null 2>&1
 
 
 OSVER=$( sw_vers -productVersion        )

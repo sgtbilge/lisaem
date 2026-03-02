@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lisaem": {
+      "command": "/usr/bin/python3",
+      "args": ["/Users/peter/GitHub/lisaem/lisaem-mcp-bridge.py"],
+      "env": {
+        "LISAEM_TMPDIR": "/Users/peter/GitHub/lisaem/bin/LisaEm.app/Contents/MacOS/.tmp"
+      }
+    }
+  }
+}

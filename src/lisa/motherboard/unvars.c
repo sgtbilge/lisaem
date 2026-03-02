@@ -28,6 +28,7 @@ REASSIGN(int,cheat_ram_test,1);            // careful if we change the type of t
 REASSIGN(uint32, bootblockchecksum,0);     // checksum of bootsector (sector 0) whether from profile or floppy.
 REASSIGN(int,romless,0);                   // are we romless?
 REASSIGN(int,xenix_patch,1);               // 2022.03.06 flag to signal Xenix HLE patches
+REASSIGN(int,xenix_idle_profile_compat,1); // 2026.02.26: relax ProFile handshake timing for Xenix (Idle-like behavior)
 REASSIGN(int,macworks_hle,1);              // 2021.04.15 flag to signal MacWorks XL 3.0 has been patched for HLE
 REASSIGN(int,los31_hle,1);                 // 2021.04.14 flag to signal LOS 3.1 has been patched for HLE
 REASSIGN(int,monitor_patch,1);             // 2022.03.06 flag to signal Monitor 12.x has been patched for HLE

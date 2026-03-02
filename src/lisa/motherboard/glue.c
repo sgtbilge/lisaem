@@ -370,8 +370,7 @@ int check_running_lisa_os(void)
             running_lisa_os=LISA_MACWORKS_RUNNING;
             return running_lisa_os;}
    else
-   if ( ((v1 & 0x00ffffff) ==0x000001c0  && (v2 & 0x00ffffff)==0x000001e0) ||        // Xenix
-        (bootblockchecksum==0x4e1ae481) )                                              // Xenix 3.0 boot floppy (normal + xprofile patch)
+   if ((v1 & 0x00ffffff) ==0x000001c0  && (v2 & 0x00ffffff)==0x000001e0)            // Xenix
       {
               char xenix_note[128];
               //if (lisa_os_mouse_x_ptr!=0x0000082e) ALERT_LOG(0,"Mouse vector changed from %08x,%08x to 82e",lisa_os_mouse_x_ptr,lisa_os_mouse_y_ptr);
@@ -380,6 +379,8 @@ int check_running_lisa_os(void)
               {
                 snprintf(xenix_note,sizeof(xenix_note),"[xenix-detect] pc=%08x context=%d v1=%08x v2=%08x patch=%d",reg68k_pc,context,v1,v2,xenix_patch);
                 xenix_log_note(xenix_note);
+                if (buglog==NULL) buglog=stderr;
+                debug_log_enabled=1;
               }
               running_lisa_os=LISA_XENIX_RUNNING;
               if (xenix_patch) apply_xenix_hle_patches();
