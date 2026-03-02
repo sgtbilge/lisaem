@@ -630,16 +630,16 @@ ACGLOBAL(uint8,highest_bit_val_inv[],
 #define CTRL_RES_BIT 128
 
 // if all are cleared, clear bit 7 else set it
-//if (via[2].via[IER] & via[2].via[IFR] & 0x7f) via[2].via[IFR] |=0x80; // if any actively on, bit 7 is on.
-
 #define FIX_VIA_IFR(vianum)  {                                                               \
-                               if ( via[vianum].via[IFR] & 127) via[vianum].via[IFR]|=128;   \
-                               else via[vianum].via[IFR]=0;                                  \
+                               if ( (via[vianum].via[IFR] & 127) & (via[vianum].via[IER] & 127) ) \
+                                    via[vianum].via[IFR]|=128;                               \
+                               else via[vianum].via[IFR] &= 127;                             \
                              }
 
 #define FIX_VIAP_IFR()       {                                                               \
-                               if ( V->via[IFR] & 127) V->via[IFR]|=128;                     \
-                               else V->via[IFR]=0;                                           \
+                               if ( (V->via[IFR] & 127) & (V->via[IER] & 127) )              \
+                                    V->via[IFR]|=128;                                        \
+                               else V->via[IFR] &= 127;                                      \
                               }
 
 #define IS_PARALLEL_PORT_ENABLED(vianum) (profile_power & (1<<(vianum-2)) )
@@ -774,6 +774,7 @@ DECLARE(int,macworks4mb);
 DECLARE(int,consoletermwindow);          // preference: enable TerminalWx window for console terminal (UniPlux, LPW, Xenix, etc.)
 GLOBAL(int,romless,0);                   // are we romless?
 GLOBAL(int,xenix_patch,1);               // 2022.03.06 flag to signal Xenix HLE patches
+GLOBAL(int,xenix_idle_profile_compat,1); // 2026.02.26: relax ProFile handshake timing for Xenix (Idle-like behavior)
 GLOBAL(int,macworks_hle,1);              // 2021.04.15 flag to signal MacWorks XL 3.0 has been patched for HLE
 GLOBAL(int,los31_hle,1);                 // 2021.04.14 flag to signal LOS 3.1 has been patched for HLE
 GLOBAL(int,monitor_patch,1);             // 2022.03.06 flag to signal Monitor 12.x has been patched for HLE
@@ -1477,16 +1478,15 @@ DECLARE(char,_msg_alert2[1024]);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
    #define DEBUG_LOG( level, fmt, args... )                                                                          \
-   { if ( (level <= (DEBUGLEVEL)) && (debug_log_enabled && !!buglog ) )                                              \
-        {  fprintf(buglog,"%s:%s:%d:",__FILE__,__FUNCTION__,__LINE__);                                               \
-           fprintf(buglog,  fmt , ## args);                                                                          \
-           fprintf(buglog,"| %x%x:%x%x:%x%x.%x %ld\n",                                                               \
+   { if ( (level <= (DEBUGLEVEL)) && (debug_log_enabled) )                                                            \
+        {  fprintf(stderr,"%s:%s:%d:",__FILE__,__FUNCTION__,__LINE__);                                               \
+           fprintf(stderr,  fmt , ## args);                                                                          \
+           fprintf(stderr,"| %x%x:%x%x:%x%x.%x %ld\n",                                                               \
                           lisa_clock.hours_h,lisa_clock.hours_l,                                                     \
                           lisa_clock.mins_h,lisa_clock.mins_l,                                                       \
                           lisa_clock.secs_h,lisa_clock.secs_l,                                                       \
                           lisa_clock.tenths, (long)cpu68k_clocks);                                                   \
-            fflush(buglog);                                                                                          \
-            fflush(stdout);                                                                                          \
+            fflush(stderr);                                                                                          \
          }                                                                                                           \
    }
 
@@ -1575,13 +1575,14 @@ extern void on_lisa_exit(void);
 //////////////////////////////////////////////////////////////////////////////////////////////////
 #define ALERT_LOG( level, fmt, args... )                                                         \
     { if ( (level <= DEBUGLEVEL) )                                                               \
-            fprintf((buglog ? buglog:stderr),"%s:%s:%d:",__FILE__,__FUNCTION__,__LINE__);        \
+        {   fprintf((buglog ? buglog:stderr),"%s:%s:%d:",__FILE__,__FUNCTION__,__LINE__);        \
             fprintf((buglog ? buglog:stderr),  fmt , ## args);                                   \
             fprintf((buglog ? buglog:stderr),"| %x%x:%x%x:%x%x.%x %ld\n",                        \
                           lisa_clock.hours_h,lisa_clock.hours_l,                                 \
                           lisa_clock.mins_h,lisa_clock.mins_l,                                   \
                           lisa_clock.secs_h,lisa_clock.secs_l,                                   \
                           lisa_clock.tenths, (long)cpu68k_clocks);                               \
+        }                                                                                        \
     }
 //////////////////////////////////////////////////////////////////////////////////////////////////
 #else
@@ -1731,7 +1732,8 @@ extern void shift_option_7(void);
 extern void add_mouse_event(int16 x, int16 y, int8 button);
 
 extern void mmuflush(uint16 opts);
-extern lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9);
+extern lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9, uint32 a17);
+extern lisa_mem_t wmmuslr2fn(uint16 slr, uint32 a9, uint32 a17);
 extern t_ipc_table *get_ipct(uint32 address);
 extern void checkcontext(uint8 c, char *text);
 extern void cpu68k_printipc(t_ipc * ipc);
@@ -1739,9 +1741,7 @@ extern void cpu68k_printipc(t_ipc * ipc);
   extern void dump_scc(void);
 #endif
 extern char *printslr(char *x, long size, uint16 slr);
-extern lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9);
 extern void get_slr_page_range(int cx,int seg, int16 *pagestart, int16 *pageend, lisa_mem_t *rfn, lisa_mem_t *wfn);
-extern lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9);
 
 
 
@@ -2723,12 +2723,12 @@ GLOBAL(uint32,minlisaram,0);
 #define CHK_RAM_LIMITS(addr)                                                                                                 \
 {       physaddr=RAW_MMU_TRANSLATE(addr);                                                                                    \
         if      (physaddr<(signed)minlisaram)  {ALERTOVERFLOW("underflow"); physaddr=-2;}                                    \
-        else if (physaddr>(signed)maxlisaram)  {ALERTOVERFLOW("overflow");  physaddr=-1;}                                    \
+        else if (physaddr>(signed)maxlisaram && physaddr > 0xffff)  {ALERTOVERFLOW("overflow");  physaddr=-1;}               \
 }
 
 #define CHK_RAM_A_LIMITS(c,addr)                                                                                             \
 {       physaddr=(        (((addr & ADDRESSFILT)+mmu_trans_all[c][(addr & MMUEPAGEFL)>>9].address) ));                       \
-        if (physaddr<(signed)minlisaram) physaddr=-2;  else if (physaddr>(signed)maxlisaram) physaddr=-1;                    \
+        if (physaddr<(signed)minlisaram) physaddr=-2;  else if (physaddr>(signed)maxlisaram && physaddr > 0xffff) physaddr=-1; \
 }
 
 
@@ -2747,8 +2747,8 @@ GLOBAL(uint32,minlisaram,0);
 
 #define RCHK_RAM_LIMITS(addr)                                                                                                \
 {          physaddr=RAW_MMU_TRANSLATE(addr);                                                                                 \
-           if (physaddr<minlisaram) return 0x75;  else if (physaddr>(signed)maxlisaram) physaddr=-1;                         \
-           if ((((uint32)(physaddr))>=maxlisaram))                                                                           \
+           if (physaddr<minlisaram) return 0x75;  else if (physaddr>(signed)maxlisaram && physaddr > 0xffff) physaddr=-1;       \
+           if ((((uint32)(physaddr))>=maxlisaram && ((uint32)(physaddr)) > 0xffff))                                          \
            {fprintf(buglog,"*** %s:%s:%d:: mem out of range! @ %d/%08x :: @mmu=%08x\n\n",                                    \
             __FILE__,__FUNCTION__,__LINE__,context,addr,physaddr); CPU_READ_MODE=1; lisa_mmu_exception(addr); return 0x93;}  \
 }                                                                     //lisa_mmu_exception(addr);
@@ -2756,12 +2756,11 @@ GLOBAL(uint32,minlisaram,0);
 
 #define WCHK_RAM_LIMITS(addr)                                                                                                \
 {          physaddr=RAW_MMU_TRANSLATE(addr);                                                                                 \
-           if (physaddr<minlisaram) return;       else if (physaddr>(signed)maxlisaram) physaddr=-1;                         \
-           if ((((uint32)(physaddr))>=maxlisaram))                                                                           \
+           if (physaddr<minlisaram) return;       else if (physaddr>(signed)maxlisaram && physaddr > 0xffff) physaddr=-1;       \
+           if ((((uint32)(physaddr))>=maxlisaram && ((uint32)(physaddr)) > 0xffff))                                          \
            {fprintf(buglog,"*** %s:%s:%d:: mem out of range! @ %d/%08x :: @mmu=%08x\n\n",                                    \
-           __FILE__,__FUNCTION__,__LINE__,context,addr,physaddr);  CPU_READ_MODE=0; lisa_mmu_exception(addr); return;}       \
+            __FILE__,__FUNCTION__,__LINE__,context,addr,physaddr);  CPU_READ_MODE=0; lisa_mmu_exception(addr); return;}       \
 }                                                                     //lisa_mmu_exception(addr);
-
 #define XRCHK_RAM_LIMITS(addr) {}
 #define XWCHK_RAM_LIMITS(addr) {}
 

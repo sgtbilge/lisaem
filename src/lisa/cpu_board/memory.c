@@ -80,6 +80,7 @@ static int parity_error_hit=0;
 
 
 // forward fn header refs
+extern void xenix_log_note(const char *msg);
 void lisa_parity_error(uint32 addr);
 void lisa_hardmem_error(uint32 addr);
 void lisa_softmem_error(uint32 addr);
@@ -179,7 +180,7 @@ char *asclong(uint32 a)
           norma[4]=0;                       return norma;}
 
 
-lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9)
+lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9, uint32 a17)
 {
    lisa_mem_t r=bad_page;
 
@@ -189,7 +190,14 @@ lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9)
     case SLR_RO_MEM:    r=ram;                     break; //DEBUG_LOG(100,"0101 read only ram  "); break;
     case SLR_RW_STK:    r=ram;                     break; //DEBUG_LOG(100,"0110 r/w stack      "); break;
     case SLR_RW_MEM:    r=ram;                     break; //DEBUG_LOG(100,"0111 r/w ram        "); break;
-    case SLR_IO_SPACE:  r=io_map[a9&0x7f];         break; //DEBUG_LOG(100,"1001 slr=%04x a9=%08x -> io",slr,a9); break;
+    case SLR_IO_SPACE:
+        {
+            uint32 phys_offset = (mmu_all[context][a17].sor << 9) + (a9 << 9);
+            // Xenix Hack: segment 0x78 or physical 0xF000 is the memory error latch
+            if (a17 == 0x78 || (phys_offset & 0xf800) == 0xf000) r=Oxf000_memerror;
+            else r=io_map[(phys_offset >> 9) & 0x7f];
+        }
+        break;
     case SLR_SIO_SPACE: r=(a9&64)?sio_mrg:sio_rom; break; //DEBUG_LOG(100,"1111 slr=%04x a9=%08x sio mrg or rom? (%d ? mrg:rom)",slr,a9,a9 & 64); break;
    }
 
@@ -197,7 +205,7 @@ lisa_mem_t rmmuslr2fn(uint16 slr, uint32 a9)
 }
 
 
-lisa_mem_t wmmuslr2fn(uint16 slr, uint32 a9)
+lisa_mem_t wmmuslr2fn(uint16 slr, uint32 a9, uint32 a17)
 {
    lisa_mem_t w=bad_page;
 
@@ -207,7 +215,14 @@ lisa_mem_t wmmuslr2fn(uint16 slr, uint32 a9)
     case SLR_RO_MEM:    w=bad_page;               break; //DEBUG_LOG(100,"0101 read only ram  "); break;
     case SLR_RW_STK:    w=ram;                    break; //DEBUG_LOG(100,"0110 r/w stack      "); break;
     case SLR_RW_MEM:    w=ram;                    break; //DEBUG_LOG(100,"0111 r/w ram        "); break;
-    case SLR_IO_SPACE:  w=io_map[a9&0x7f];        break; //DEBUG_LOG(100,"1001 slr=%04x a9=%08x -> io",slr,a9); break; // should be this one.
+    case SLR_IO_SPACE:
+        {
+            uint32 phys_offset = (mmu_all[context][a17].sor << 9) + (a9 << 9);
+            // Xenix Hack: segment 0x78 or physical 0xF000 is the memory error latch
+            if (a17 == 0x78 || (phys_offset & 0xf800) == 0xf000) w=Oxf000_memerror;
+            else w=io_map[(phys_offset >> 9) & 0x7f];
+        }
+        break;
     case SLR_SIO_SPACE: w=(a9&64)?sio_mrg:sio_rom;break; //DEBUG_LOG(100,"1111 slr=%04x a9=%08x sio mrg or rom? (%d ? mrg:rom)",slr,a9,a9 & 64); break;
    }
 
@@ -339,7 +354,7 @@ char *chk_mtmmu(uint32 a, uint8 write)
     slr=mmu_all[context][a17].slr;
     sor=mmu_all[context][a17].sor;
 
-    mfn=write ? wmmuslr2fn(slr, (a & 0x00ffffff)>>9) : rmmuslr2fn(slr, a9 );
+    mfn=write ? wmmuslr2fn(slr, (a & 0x00ffffff)>>9, a17) : rmmuslr2fn(slr, a9, a17);
     fn =write ? mmu_trans_all[context][a9].writefn: mmu_trans_all[context][a9].readfn;
 
     mad=(((sor & 0x0fff)<<9)+(a & MMUXXFILT) ) & TWOMEGMLIM;
@@ -2606,10 +2621,8 @@ uint8  lisa_rb_ram(uint32 addr)
    //DEBUG_LOG(100,"mmu translation of %d/%08x is: %08x",context,addr,physaddr);
    if (physaddr >  -1) return (uint8)(lisaram[physaddr]);
    CPU_READ_MODE=1;
-   CHK_PHYS_OFLOW(addr);
-   CHK_PHYS_UFLOW(addr);
-
-   return 0x39;
+   if (abort_opcode!=2) lisa_mmu_exception(addr);
+   return 0;
 }
 
 uint16 lisa_rw_ram(uint32 addr)
@@ -2621,11 +2634,9 @@ uint16 lisa_rw_ram(uint32 addr)
    //DEBUG_LOG(100,"mmu translation of %d/%08x is: %08x",context,addr,physaddr);
    if (physaddr >  -1) return LOCENDIAN16(*(uint16 *)(&lisaram[physaddr]) );
 
-// ALERT_LOG(0,"over/underflow at %08x",addr);
    CPU_READ_MODE=1;
-   CHK_PHYS_OFLOW(addr);
-   CHK_PHYS_UFLOW(addr);
-   return 0x3939;
+   if (abort_opcode!=2) lisa_mmu_exception(addr);
+   return 0;
 
 }
 
@@ -2651,10 +2662,13 @@ uint32 lisa_rl_ram(uint32 addr)
    if (physaddr >  -1) return LOCENDIAN32(*(uint32 *)(&lisaram[physaddr]) );
 
    CPU_READ_MODE=1;
-   CHK_PHYS_OFLOW(addr);
-   CHK_PHYS_UFLOW(addr);
-// ALERT_LOG(0,"over/underflow at %08x",addr);
-   return 0x39393939;
+   {static int cnt=0; if(cnt<20){cnt++;
+    char _sm[128]; snprintf(_sm,sizeof(_sm),"[xenix-oflow] rl_ram virt=%08x phys=%d max=%08x pc=%08x",
+                            addr,physaddr,(uint32)maxlisaram,reg68k_pc);
+    xenix_log_note(_sm);}
+   }
+   if (abort_opcode!=2) lisa_mmu_exception(addr);
+   return 0;
 }
 
 
@@ -3148,6 +3162,7 @@ void   lisa_wb_sio_mrg(uint32 addr, uint8 data)
         if (mmu_all[con][a].sor==r) return; // don't bother wasting time on writing back the same value
 
         DEBUG_LOG(100,"mmu_all[%d][%d].sor=%04x chg:%d",con,a,mmu_all[con][a].sor,mmu_all[con][a].changed);
+        if(a>=10) ALERT_LOG(0,"[xenix-mmu-sor] wb: mmu[%d][%d].sor=%03x->%03x slr=%03x pc=%08x",con,a,mmu_all[con][a].sor,r,mmu_all[con][a].slr,reg68k_pc);
         // Shadow the write to context 0 (context 0 is our START mode, context 1 is the real lisa context 0)
         if (con)  { mmu_all[0][a].sor=r; mmu_all[0][a].changed|=2;}
         mmu_all[con][a].sor=r; mmu_all[con][a].changed|=2;
@@ -3181,6 +3196,7 @@ void   lisa_wb_sio_mrg(uint32 addr, uint8 data)
         else          r=(data<<8)    | r2;
         if (mmu_all[con][a].slr==r) return; // don't bother wasting time on writing back the same value
 
+        if(a>=10) ALERT_LOG(0,"[xenix-mmu-slr] wb: mmu[%d][%d].slr=%03x->%03x sor=%03x pc=%08x",con,a,mmu_all[con][a].slr,r,mmu_all[con][a].sor,reg68k_pc);
         if (con)  {  mmu_all[0][a].slr=r; mmu_all[0][a].changed|=1;}
         mmu_all[con][a].slr=r; mmu_all[con][a].changed |=1;
 
@@ -3204,7 +3220,7 @@ void   lisa_ww_sio_mrg(uint32 addr, uint16 data)
         data &=0x0fff;
         if (data==mmu_all[con][a].sor)   {DEBUG_LOG(100,"mmu[%d][%d].sor no change needed ",con,a);return;} // don't bother wasting time here - sync new just incase.
 
-        //ALERT_LOG(0,"Wrote %03x to mmu[%d][%d].sor addr=%08x",data,context,a,addr);
+        if(a>=10) ALERT_LOG(0,"[xenix-mmu-sor] ww: mmu[%d][%d].sor=%03x->%03x slr=%03x pc=%08x",con,a,mmu_all[con][a].sor,data,mmu_all[con][a].slr,reg68k_pc);
 
         // Shadow the write to context 0 and 1 (context 0 is our START mode, context 1 is the real lisa context 0)
         if (con==1)    { mmu_all[0][a].sor=data; mmu_all[0][a].changed|=2;}
@@ -3229,7 +3245,7 @@ void   lisa_ww_sio_mrg(uint32 addr, uint16 data)
     {
         data &=0x0fff;
 
-        //ALERT_LOG(0,"Wrote %03x to mmu[%d][%d].slr addr=%08x",data,context,a,addr);
+        if(a>=10) ALERT_LOG(0,"[xenix-mmu-slr] ww: mmu[%d][%d].slr=%03x->%03x sor=%03x pc=%08x",con,a,mmu_all[con][a].slr,data,mmu_all[con][a].sor,reg68k_pc);
 
         if (data==mmu_all[con][a].slr)
             {DEBUG_LOG(100,"no change to slr: mmu_all[%d][%d].slr=%04x changed=%d data=%04x",
@@ -3305,7 +3321,7 @@ uint8  *lisa_mptr_sio_mmu(uint32 addr)
         mmu_trans_all[con][a9].address);
 
     ///// changed context here to con!!!!!
-    f=rmmuslr2fn(mmu_all[context][a17].slr,a9); /// *** CONTEXT or CON????
+    f=rmmuslr2fn(mmu_all[context][a17].slr,a9,a17); /// *** CONTEXT or CON????
     DEBUG_LOG(3,"fetching mmu function called: %d %s con:%d slr=%04x @%08x",f,mspace(f),con,mmu_all[con][a17].slr,addr);
 
     if (f!=ram && f!=vidram) return mem68k_memptr[f](addr);
@@ -3342,7 +3358,7 @@ uint8  lisa_rb_sio_mmu(uint32 addr)
 
 
     ///// changed context here to con!!!!!
-    f=rmmuslr2fn(mmu_all[context][a17].slr,a9); /// *** CONTEXT or CON????
+    f=rmmuslr2fn(mmu_all[context][a17].slr,a9,a17); /// *** CONTEXT or CON????
 
 //    DEBUG_LOG(100,"fetching mmu function called: %d %s seg1/seg2/start:%d/%d/%d con:%d context%d slr=%04x",f,mspace(f),
 //            segment1,segment2,start,
@@ -3393,7 +3409,7 @@ uint16 lisa_rw_sio_mmu(uint32 addr)
     //    mmu_all[con][a17].changed);
 
     ///// changed context here to con!!!!!
-    f=rmmuslr2fn(mmu_all[context][a17].slr,a9); /// *** CONTEXT or CON????
+    f=rmmuslr2fn(mmu_all[context][a17].slr,a9,a17); /// *** CONTEXT or CON????
 
 //    DEBUG_LOG(3,"fetching mmu function called: %d %s con:%d slr=%04x",f,mspace(f),con,mmu_all[con][a17].slr);
 
@@ -3440,7 +3456,7 @@ uint32 lisa_rl_sio_mmu(uint32 addr)
 
 
     ///// changed context here to con!!!!!
-    f=rmmuslr2fn(mmu_all[context][a17].slr,a9); /// *** CONTEXT or CON????
+    f=rmmuslr2fn(mmu_all[context][a17].slr,a9,a17); /// *** CONTEXT or CON????
 
 //    DEBUG_LOG(3,"fetching mmu function called: %d %s con:%d slr=%04x",f,mspace(f),con,mmu_all[con][a17].slr);
 
@@ -3488,7 +3504,7 @@ void   lisa_wb_sio_mmu(uint32 addr, uint8 data)
 
 
     ///// changed context here to con!!!!!
-    f=wmmuslr2fn(mmu_all[context][a17].slr,a9); /// *** CONTEXT or CON????
+    f=wmmuslr2fn(mmu_all[context][a17].slr,a9,a17); /// *** CONTEXT or CON????
 //    DEBUG_LOG(3,"storing mmu function called: %d %s con:%d slr=%04x",f,mspace(f),con,mmu_all[context][a17].slr);
 
     if (f!=ram && f!=vidram) {mem68k_store_byte[f](addr,data); return;}
@@ -3532,7 +3548,7 @@ void   lisa_ww_sio_mmu(uint32 addr, uint16 data)
 //        mmu_all[con][a17].changed);
 
     ///// changed context here to con!!!!!
-    f=wmmuslr2fn(mmu_all[context][a17].slr,a9); /// *** CONTEXT or CON????
+    f=wmmuslr2fn(mmu_all[context][a17].slr,a9,a17); /// *** CONTEXT or CON????
 
 
 //    DEBUG_LOG(3,"storing mmu function called: %d %s con:%d slr=%04x",f,mspace(f),con,mmu_all[con][a17].slr);
@@ -3578,7 +3594,7 @@ void   lisa_wl_sio_mmu(uint32 addr, uint32 data)
 //        mmu_all[con][a17].changed);
 
     ///// changed context here to con!!!!!
-    f=wmmuslr2fn(mmu_all[context][a17].slr,a9); /// *** CONTEXT or CON????
+    f=wmmuslr2fn(mmu_all[context][a17].slr,a9,a17); /// *** CONTEXT or CON????
 
 //    DEBUG_LOG(3,"storing mmu function called: %d %s con:%d slr=%04x",f,mspace(f),con,mmu_all[context][a17].slr);
 
@@ -3604,54 +3620,68 @@ void   lisa_wl_sio_mmu(uint32 addr, uint32 data)
 
 uint8  *lisa_mptr_io(uint32 addr)
 {
+    uint32 paddr;
     addr &=ADDRESSFILT;
     CHECK_DIRTY_MMU(addr);  DEBUG_LOG(100,"@%08x",addr);
+    paddr = CHK_MMU_TRANS(addr);
     //ui_log_verbose("****lisa_mptr_io got called!****"); //return NULL;
-    return    mem68k_memptr[io_map[(addr &0xffff)>>9]](addr);
+    return    mem68k_memptr[io_map[(paddr &0xffff)>>9]](addr);
 }
 
 uint8  lisa_rb_io(uint32 addr)
 {
+    uint32 paddr;
     addr &=ADDRESSFILT;
     CHECK_DIRTY_MMU(addr);  DEBUG_LOG(100,"@%08x",addr);
-    return    mem68k_fetch_byte[io_map[(addr &0xffff)>>9]](addr);
+    paddr = CHK_MMU_TRANS(addr);
+    return    mem68k_fetch_byte[io_map[(paddr &0xffff)>>9]](addr);
 }
 
 uint16 lisa_rw_io(uint32 addr)
 {
+    uint32 paddr;
     addr &=ADDRESSFILT;
     CHECK_DIRTY_MMU(addr);  DEBUG_LOG(100,"@%08x",addr);
-    return    mem68k_fetch_word[io_map[(addr &0xffff)>>9]](addr);
+    paddr = CHK_MMU_TRANS(addr);
+    return    mem68k_fetch_word[io_map[(paddr &0xffff)>>9]](addr);
 }
 
 uint32 lisa_rl_io(uint32 addr)
 {
+    uint32 paddr;
     addr &=ADDRESSFILT;
     CHECK_DIRTY_MMU(addr);  DEBUG_LOG(100,"@%08x",addr);
-    return    mem68k_fetch_long[io_map[(addr &0xffff)>>9]](addr);
+    paddr = CHK_MMU_TRANS(addr);
+    return    mem68k_fetch_long[io_map[(paddr &0xffff)>>9]](addr);
 }
 
 void   lisa_wb_io(uint32 addr, uint8 data)
 {
+    uint32 paddr;
     addr &=ADDRESSFILT;
     CHECK_DIRTY_MMU(addr);  DEBUG_LOG(100,"@%08x",addr);
-    mem68k_store_byte[io_map[(addr &0xffff)>>9]](addr,data);
+    paddr = CHK_MMU_TRANS(addr);
+    mem68k_store_byte[io_map[(paddr &0xffff)>>9]](addr,data);
 }
 
 void   lisa_ww_io(uint32 addr, uint16 data)
 {
+    uint32 paddr;
     addr &=ADDRESSFILT;
     CHECK_DIRTY_MMU(addr);  DEBUG_LOG(100,"@%08x",addr);
-    mem68k_store_word[io_map[(addr &0xffff)>>9]](addr,data);
+    paddr = CHK_MMU_TRANS(addr);
+    mem68k_store_word[io_map[(paddr &0xffff)>>9]](addr,data);
 }
 
 void   lisa_wl_io(uint32 addr, uint32 data)
 {
+    uint32 paddr;
     addr &=ADDRESSFILT;
     CHECK_DIRTY_MMU(addr);  DEBUG_LOG(100,"@%08x",addr);
-    DEBUG_LOG(100,": %08x<-%08x indx:%d iomap[]=%d",addr,data,(addr &0xffff)>>9,io_map[(addr &0xffff)>>9]);
+    paddr = CHK_MMU_TRANS(addr);
+    DEBUG_LOG(100,": %08x<-%08x indx:%d iomap[]=%d",addr,data,(paddr &0xffff)>>9,io_map[(paddr &0xffff)>>9]);
 
-    mem68k_store_long[io_map[(addr &0xffff)>>9]](addr,data);
+    mem68k_store_long[io_map[(paddr &0xffff)>>9]](addr,data);
 }
 
 

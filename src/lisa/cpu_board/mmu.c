@@ -388,8 +388,9 @@ void init_lisa_mmu(void)
     }
 
     // Setup I/O space in page 126/127 of our context 1 (lisa context 0)
-    mmu_all[1][126].slr=0x900;       mmu_all[1][126].sor=0;
     mmu_all[1][127].slr=0xf00;       mmu_all[1][127].sor=0;
+    mmu_all[1][0x78].slr=SLR_IO_SPACE; mmu_all[1][0x78].sor=0; // Xenix memory error segment
+    mmu_all[1][126].slr=0x900;       mmu_all[1][126].sor=0;
 
 
     // Initialize Lisa MMU Function Types
@@ -684,6 +685,13 @@ void fill_mmu_segment(uint8 segment, int32 ea, lisa_mem_t rfn, lisa_mem_t wfn, i
 
     DEBUG_LOG(0,"starting on segment %d",segment);
 
+    // Xenix Hack: segment 0x78 is always memory error latch in IO space
+    if (segment == 0x78 && ((mmu_all[cx][segment].slr & SLR_MASK) == SLR_IO_SPACE))
+    {
+        rfn = Oxf000_memerror;
+        wfn = Oxf000_memerror;
+    }
+
     if (!is_valid_slr(mmu_all[cx][segment].slr)) {pagestart=-1; pageend=-1; DEBUG_LOG(0,"Illegal SLR:%04x @ seg %d in context:%d, forcing bad_page",mmu_all[cx][segment].slr,segment,context); }
 
     if (pagestart<0 || pageend<0 || pagestart>pageend || pagestart>255 || pageend>255) // invalidate the whole block, no need for checking pagestart/pageend
@@ -772,7 +780,11 @@ void get_slr_page_range(int cx,int seg, int16 *pagestart, int16 *pageend, lisa_m
      case SLR_RW_STK:           *pagestart=page;     *pageend=255;      *rfn=ram;     *wfn=ram;      return; // 2020.11.08 was pagestart=page;
      case SLR_RO_MEM:           *pagestart=0;        *pageend=page;     *rfn=ram;     *wfn=ro_violn; return;
      case SLR_RW_MEM:           *pagestart=0;        *pageend=page;     *rfn=ram;     *wfn=ram;      return;
-     case SLR_IO_SPACE:         *pagestart=0;        *pageend=page;     *rfn=io;      *wfn=io;       return;
+     case SLR_IO_SPACE:         *pagestart=0;        *pageend=page;
+                                // Xenix Hack: segment 0x78 is the memory error latch
+                                if (seg == 0x78) { *rfn=Oxf000_memerror; *wfn=Oxf000_memerror; }
+                                else             { *rfn=io;              *wfn=io;              }
+                                return;
      case SLR_SIO_SPACE:        *pagestart=0;        *pageend=page;     *rfn=sio_mmu; *wfn=sio_mmu;  return;
      case SLR_UNUSED_PAGE:
      default:                   *pagestart=0;        *pageend=255;      *rfn=bad_page;*wfn=bad_page; return;

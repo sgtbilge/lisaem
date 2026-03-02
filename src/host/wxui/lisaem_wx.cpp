@@ -148,6 +148,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <wx/filename.h>
+#include <wx/snglinst.h>
 #include <string>
 
 
@@ -307,8 +308,10 @@ static wxToolBar *g_toolbar=NULL;
 class LisaEmApp : public wxApp
 {
 public:
+    LisaEmApp() { m_checker = NULL; }
     // Called on application startup
     virtual bool OnInit()                         WXOVERRIDE;
+    virtual int  OnExit()                         WXOVERRIDE;
     bool OnCmdLineParsed(wxCmdLineParser& parser) WXOVERRIDE;
     void OnInitCmdLine(wxCmdLineParser& parser)   WXOVERRIDE;
     void LisaSkinConfig(void);
@@ -316,10 +319,14 @@ public:
     #ifndef __WXOSX__
     void OnQuit(wxCommandEvent& event);
     #endif
+
+private:
+    wxSingleInstanceChecker *m_checker;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 static int set_window_size_already=0;
+static int g_snapping_window=0;      // re-entry guard for debounce-triggered window snap
 
 
 static int on_start_poweron=0,
@@ -529,6 +536,7 @@ void set_hidpi_scale(void);
 
 extern "C" void disconnect_serial(int port);
 extern "C" void connect_device_to_serial(int port, FILE **scc_port_F, uint8 *serial, wxString *setting, wxString *param, wxString *xon, int *scc_telnet_port);
+extern "C" FLIFLO_QUEUE_t SCC_READ[16], SCC_WRITE[16];
 
 extern TerminalWx  *Terminal[16];
 
@@ -771,7 +779,6 @@ BEGIN_EVENT_TABLE(LisaEmFrame, wxFrame)
     EVT_MENU(ID_VID_SCALE_ZOOMOUT,LisaEmFrame::OnZoomOut)
 
     EVT_MENU(ID_VID_FULLSCREEN,  LisaEmFrame::OnFullScreen)
-
   // reinstated as per request by Kallikak, added 4Hz to help with really slow machines
     EVT_MENU(ID_REFRESH_60Hz,    LisaEmFrame::OnRefresh60)
     EVT_MENU(ID_REFRESH_30Hz,    LisaEmFrame::OnRefresh30)
@@ -789,8 +796,9 @@ BEGIN_EVENT_TABLE(LisaEmFrame, wxFrame)
 
 
     //EVT_IDLE(LisaEmFrame::OnIdleEvent)
-    EVT_TIMER(ID_EMULATION_TIMER,LisaEmFrame::OnEmulationTimer)
-    EVT_MENU(wxID_EXIT,          LisaEmFrame::OnQuit)
+    EVT_TIMER(ID_EMULATION_TIMER,        LisaEmFrame::OnEmulationTimer)
+    EVT_TIMER(ID_RESIZE_DEBOUNCE_TIMER,  LisaEmFrame::OnResizeDebounceTimer)
+    EVT_MENU(wxID_EXIT,                  LisaEmFrame::OnQuit)
     EVT_SIZE(                    LisaEmFrame::OnSize)
     EVT_CLOSE(                   LisaEmFrame::OnClose)
 END_EVENT_TABLE()
@@ -831,8 +839,11 @@ static wxPanel   *g_fs_led_floppy  = NULL;
 static wxPanel   *g_fs_led_profile = NULL;
 static int        g_fullscreen_scale_in_progress=0;
 
-static const char *lisa_mcp_cmd_path=".tmp/lisaem-mcp-cmd.txt";
-static const char *lisa_mcp_state_path=".tmp/lisaem-mcp-state.txt";
+void update_menu_checkmarks(void);
+
+static char g_mcp_tmpdir[512] = ".tmp";   // overridden by LISAEM_TMPDIR env var at init
+static char lisa_mcp_cmd_path[560];
+static char lisa_mcp_state_path[560];
 
 static int lisa_mcp_server_fd = -1;
 static int lisa_mcp_client_fd = -1;
@@ -843,6 +854,14 @@ static int mcp_type_delay = 0;
 
 static void lisa_mcp_init_server(void)
 {
+    // Honour LISAEM_TMPDIR so IPC files land in the right place regardless of CWD
+    const char *env_tmpdir = getenv("LISAEM_TMPDIR");
+    if (env_tmpdir && *env_tmpdir)
+        snprintf(g_mcp_tmpdir, sizeof(g_mcp_tmpdir), "%s", env_tmpdir);
+    (void)mkdir(g_mcp_tmpdir, 0777);
+    snprintf(lisa_mcp_cmd_path,   sizeof(lisa_mcp_cmd_path),   "%s/lisaem-mcp-cmd.txt",   g_mcp_tmpdir);
+    snprintf(lisa_mcp_state_path, sizeof(lisa_mcp_state_path), "%s/lisaem-mcp-state.txt", g_mcp_tmpdir);
+
     lisa_mcp_server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (lisa_mcp_server_fd < 0) return;
 
@@ -1140,8 +1159,32 @@ static void lisa_mcp_process_commands(void)
         }
         else if (!strcmp(line,"apple3"))
         {
-            apple_3();
-            snprintf(msg,sizeof(msg),"apple3");
+            // Use send_cops_keycode directly to bypass apple_combo_key() guard
+            send_cops_keycode(KEYCODE_COMMAND|KEY_DOWN);
+            send_cops_keycode(KEYCODE_3|KEY_DOWN);
+            send_cops_keycode(KEYCODE_3|KEY_UP);
+            send_cops_keycode(KEYCODE_COMMAND|KEY_UP);
+            snprintf(msg,sizeof(msg),"apple3 (direct keycode)");
+        }
+        else if (!strncmp(line,"serial_a ",9))
+        {
+            // Inject hex bytes directly into Z8530 Port A receive buffer
+            const char *p = line + 9;
+            int count = 0;
+            while (*p)
+            {
+                while (*p == ' ') p++;
+                if (!*p) break;
+                unsigned int b = 0;
+                if (sscanf(p, "%2x", &b) == 1)
+                {
+                    fliflo_buff_add(&SCC_READ[1], (uint8)b);
+                    count++;
+                    p += 2;
+                }
+                else break;
+            }
+            snprintf(msg, sizeof(msg), "serial_a: injected %d bytes", count);
         }
         else if (!strncmp(line,"move ",5))
         {
@@ -1219,13 +1262,37 @@ static void lisa_mcp_process_commands(void)
         }
         else if (!strncmp(line,"dump ",5))
         {
-            uint32 addr=0, len=0;
-            if (sscanf(line+5,"%x %x",&addr,&len)==2)
+            uint32 addr=0, len=0, cx=0;
+            int scanned = sscanf(line+5, "context %x %x %x", &cx, &addr, &len);
+            if (scanned == 3)
+            {
+                if (lisaram && cx < 8)
+                {
+                    char dump_path[560]; snprintf(dump_path,sizeof(dump_path),"%s/lisaem-mcp-dump.bin",g_mcp_tmpdir);
+                    FILE *df = fopen(dump_path,"wb");
+                    if (df)
+                    {
+                        uint32 dumped=0;
+                        for (uint32 i=0; i<len; i++)
+                        {
+                            uint32 paddr = RAW_MMU_TRANSLATE_CX(cx, (addr+i));
+                            if (paddr < maxlisaram) { fputc(lisaram[paddr], df); dumped++; }
+                            else { fputc(0x39, df); dumped++; } // sentinel for unmapped
+                        }
+                        fclose(df);
+                        snprintf(msg,sizeof(msg),"dumped %u bytes from cx %x:%08x", (unsigned)dumped, (unsigned)cx, (unsigned)addr);
+                    }
+                    else snprintf(msg,sizeof(msg),"dump failed (file open)");
+                }
+                else snprintf(msg,sizeof(msg),"dump failed (bad cx or no ram)");
+            }
+            else if (sscanf(line+5,"%x %x",&addr,&len)==2)
             {
                 if (lisaram && addr < maxlisaram)
                 {
                     if (addr+len > maxlisaram) len = maxlisaram - addr;
-                    FILE *df = fopen(".tmp/lisaem-mcp-dump.bin","wb");
+                    char dump_path[560]; snprintf(dump_path,sizeof(dump_path),"%s/lisaem-mcp-dump.bin",g_mcp_tmpdir);
+                    FILE *df = fopen(dump_path,"wb");
                     if (df)
                     {
                         fwrite(lisaram + addr, 1, len, df);
@@ -1236,14 +1303,23 @@ static void lisa_mcp_process_commands(void)
                 }
                 else snprintf(msg,sizeof(msg),"dump failed (bad addr or no ram)");
             }
-            else snprintf(msg,sizeof(msg),"bad dump command (use hex)");
+            else snprintf(msg,sizeof(msg),"bad dump command (use hex [context CX])");
         }
         else if (!strncmp(line,"find ",5))
         {
             const char *p=line+5;
+            uint32 cx=0, has_cx=0;
+            if (!strncmp(p, "context ", 8)) {
+                if (sscanf(p+8, "%x", &cx) == 1) {
+                    has_cx = 1;
+                    p = strchr(p+8, ' ');
+                    if (p) while (*p == ' ') p++;
+                }
+            }
+
             uint8 pattern[256];
             uint32 patlen=0;
-            while (*p && patlen < 256)
+            if (p) while (*p && patlen < 256)
             {
                 while (*p == ' ') p++;
                 if (!*p) break;
@@ -1258,18 +1334,65 @@ static void lisa_mcp_process_commands(void)
             if (patlen > 0 && lisaram)
             {
                 uint32 found_addr=0xffffffff;
-                for (uint32 a=0; a <= maxlisaram - patlen; a++)
+                if (has_cx)
                 {
-                    if (!memcmp(lisaram+a, pattern, patlen))
+                    for (uint32 a=0; a <= 0x00ffffff - patlen; a++)
                     {
-                        found_addr=a;
-                        break;
+                        int match=1;
+                        for (uint32 i=0; i<patlen; i++) {
+                            uint32 paddr = RAW_MMU_TRANSLATE_CX(cx, (a+i));
+                            if (paddr >= maxlisaram || lisaram[paddr] != pattern[i]) { match=0; break; }
+                        }
+                        if (match) { found_addr=a; break; }
+                    }
+                }
+                else
+                {
+                    for (uint32 a=0; a <= maxlisaram - patlen; a++)
+                    {
+                        if (!memcmp(lisaram+a, pattern, patlen))
+                        {
+                            found_addr=a;
+                            break;
+                        }
                     }
                 }
                 if (found_addr != 0xffffffff) snprintf(msg,sizeof(msg),"found @ %08x",found_addr);
                 else snprintf(msg,sizeof(msg),"not found");
             }
             else snprintf(msg,sizeof(msg),"bad find command or no ram");
+        }
+        else if (!strcmp(line,"screenshot"))
+        {
+            char png_path[560];
+            snprintf(png_path, sizeof(png_path), "%s/lisaem-screenshot.png", g_mcp_tmpdir);
+            int width = 720;
+            int height = 364;
+            wxImage img(width, height, true);
+            uint8 *vram = lisaram + videolatchaddress;
+            fprintf(stderr, "MCP: capturing screenshot to %s (vram @ %08x)\n", png_path, (unsigned int)videolatchaddress);
+            if (lisaram && videolatchaddress < maxlisaram)
+            {
+                for (int yi = 0; yi < height; yi++)
+                    for (int xi = 0; xi < width; xi++)
+                    {
+                        uint8 pix = ((vram[(yi*90 + (xi>>3)) & 32767] >> (7-(xi&7))) & 1) ? 0 : 255;
+                        img.SetRGB(xi, yi, pix, pix, pix);
+                    }
+                bool ok = img.SaveFile(wxString::FromUTF8(png_path), wxBITMAP_TYPE_PNG);
+                if (ok) {
+                    fprintf(stderr, "MCP: screenshot saved successfully (%d bytes)\n", (int)wxFileName(png_path).GetSize().GetValue());
+                    snprintf(msg, sizeof(msg), "%s", png_path);
+                }
+                else {
+                    fprintf(stderr, "MCP: screenshot SaveFile failed\n");
+                    snprintf(msg, sizeof(msg), "screenshot failed (SaveFile)");
+                }
+            }
+            else {
+                fprintf(stderr, "MCP: screenshot failed (bad vram/no ram)\n");
+                snprintf(msg, sizeof(msg), "screenshot failed (bad vram/no ram)");
+            }
         }
         else
         {
@@ -1287,13 +1410,21 @@ static void lisa_mcp_process_commands(void)
                  "power=%d\n"
                  "pc=%08x\n"
                  "clock=%016llx\n"
-                 "mouse=%d,%d\n",
+                 "mouse=%d,%d\n"
+                 "vram=%08x\n"
+                 "copsqueuelen=%d\n"
+                 "via1ifr=%02x\n"
+                 "via1ier=%02x\n",
                  msg,
                  my_lisaframe ? my_lisaframe->running : -1,
                  (my_lisawin && ((my_lisawin->powerstate & POWER_ON_MASK)==POWER_ON)) ? 1 : 0,
                  reg68k_pc,
                  (long long)cpu68k_clocks,
-                 last_mouse_x, last_mouse_y);
+                 last_mouse_x, last_mouse_y,
+                 (unsigned)videolatchaddress,
+                 (int)copsqueuelen,
+                 (unsigned)via[1].via[IFR],
+                 (unsigned)via[1].via[IER]);
         send(lisa_mcp_client_fd, resp, strlen(resp), 0);
     }
 
@@ -1608,8 +1739,10 @@ static int lisa_mcp_write_debug_command_file(const char *cmdline, std::string *e
         if (err_out) *err_out="missing debug command";
         return 0;
     }
-    (void)mkdir(".tmp",0777);
-    FILE *f=fopen(".tmp/lisaem-debug-cmd.txt","wt");
+    char debug_cmd_path_buf[560], debug_state_path_buf[560];
+    snprintf(debug_cmd_path_buf,  sizeof(debug_cmd_path_buf),  "%s/lisaem-debug-cmd.txt",   g_mcp_tmpdir);
+    snprintf(debug_state_path_buf,sizeof(debug_state_path_buf),"%s/lisaem-debug-state.txt",  g_mcp_tmpdir);
+    FILE *f=fopen(debug_cmd_path_buf,"wt");
     if (!f)
     {
         if (err_out) *err_out="cannot open debug command file";
@@ -1627,7 +1760,8 @@ static int lisa_mcp_wait_debug_state(const char *wait_reason, int timeout_ms, in
     int elapsed = 0;
     for (;;)
     {
-        state_out = lisa_mcp_read_text_file(".tmp/lisaem-debug-state.txt");
+        char _dsp[560]; snprintf(_dsp,sizeof(_dsp),"%s/lisaem-debug-state.txt",g_mcp_tmpdir);
+        state_out = lisa_mcp_read_text_file(_dsp);
         if (!state_out.empty())
         {
             std::string reason = lisa_mcp_kv_get(state_out,"reason");
@@ -1741,9 +1875,10 @@ static int lisa_mcp_tool_handle(const std::string &tool, const char *args_obj, s
     out_text.clear();
     const char *args = args_obj;
     size_t alen = args_len;
-    static const char *debug_cmd_path=".tmp/lisaem-debug-cmd.txt";
-    static const char *debug_state_path=".tmp/lisaem-debug-state.txt";
-    static const char *xenix_log_path=".tmp/lisaem-xenix-console.txt";
+    char debug_cmd_path[560], debug_state_path[560], xenix_log_path[560];
+    snprintf(debug_cmd_path,   sizeof(debug_cmd_path),   "%s/lisaem-debug-cmd.txt",      g_mcp_tmpdir);
+    snprintf(debug_state_path, sizeof(debug_state_path), "%s/lisaem-debug-state.txt",     g_mcp_tmpdir);
+    snprintf(xenix_log_path,   sizeof(xenix_log_path),   "%s/lisaem-xenix-console.txt",   g_mcp_tmpdir);
 
     if (tool == "lisa_status")
     {
@@ -2336,8 +2471,9 @@ static void get_layout_display_extent(int *display_w_out, int *display_h_out)
 {
     int display_w = 720;
     int display_h = 500;
+    int mode = lisa_ui_video_mode;
 
-    switch (lisa_ui_video_mode)
+    switch (mode)
     {
         case vidmod_raw: display_h = 364; break;
         case vidmod_2y:  display_h = 364 * 2; break;
@@ -2554,7 +2690,6 @@ void buildscreenymap_3Y(void)
 
 }
 
-
 #ifdef DEBUG
 void log_screen_box(FILE *f,int x, int y, int x2, int y2)
 {
@@ -2725,7 +2860,6 @@ void LisaWin::SetVideoMode(int mode)
                                               RePainter=&LisaWin::RePaint_SingleY;
                                               break;
 
-
    case vidmod_3y:    buildscreenymap_3Y();   skin.screen_origin_x=  0;                    skin.screen_origin_y=  0; 
                                               effective_lisa_vid_size_x=  _H(720);         effective_lisa_vid_size_y=  _H(364*3);
                                               o_effective_lisa_vid_size_x=   720*2;        o_effective_lisa_vid_size_y=   364*3;
@@ -2839,6 +2973,7 @@ set_dirty;
           if (new_fh > my_lisaframe->screensizey - margin_h) new_fh = my_lisaframe->screensizey - margin_h;
           if (new_fw > 0 && new_fh > 0) my_lisaframe->SetSize(new_fw, new_fh);
       }
+
   }
 }
 
@@ -3280,7 +3415,6 @@ void LisaEmFrame::OnEmulationTimer(wxTimerEvent& WXUNUSED(event))
         lastcrtrefresh=0;
       }
 
-  
   barrier=0;
 }
 //---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -3549,7 +3683,6 @@ void LisaEmFrame::OnVideoHQ35X(wxCommandEvent& WXUNUSED(event))
 
 void LisaEmFrame::OnVideoAAGray(wxCommandEvent& WXUNUSED(event))
 {
-
     if (screensizex<IWINSIZEX || screensizey<IWINSIZEY)
     {
         wxString msg;
@@ -3564,12 +3697,14 @@ void LisaEmFrame::OnVideoAAGray(wxCommandEvent& WXUNUSED(event))
 }
 
 
-void LisaEmFrame::OnVideoSingleY(wxCommandEvent& WXUNUSED(event))           {my_lisawin->SetVideoMode(vidmod_raw);}
+void LisaEmFrame::OnVideoSingleY(wxCommandEvent& WXUNUSED(event))
+{
+    my_lisawin->SetVideoMode(vidmod_raw);
+}
 
 
 void LisaEmFrame::OnVideoDoubleY(wxCommandEvent& WXUNUSED(event))
 {
-
     if (screensizex<720+40 || screensizey<364*2+50)
     {
         wxString msg;
@@ -3897,8 +4032,46 @@ void LisaEmFrame::OnFullScreen(   wxCommandEvent& WXUNUSED(event))
 
 void LisaEmFrame::OnSize(wxSizeEvent& event)
 {
-    if (IsFullScreen()) update_fullscreen_buttons_layout();
+    if (IsFullScreen()) { update_fullscreen_buttons_layout(); event.Skip(); return; }
+    if (g_snapping_window)            { event.Skip(); return; }
+
+    if (my_lisawin)
+    {
+        int cw = 0, ch = 0;
+        my_lisawin->GetClientSize(&cw, &ch);
+        if (cw > 0 && ch > 0)
+        {
+            int display_w = 720, display_h = 500;
+            get_layout_display_extent(&display_w, &display_h);
+            float fit_x = (float)cw / (float)display_w;
+            float fit_y = (float)ch / (float)display_h;
+            float new_scale = (fit_x < fit_y) ? fit_x : fit_y;
+            if (new_scale < 0.10f) new_scale = 0.10f;
+            if (new_scale > 8.0f)  new_scale = 8.0f;
+            if (fabsf(new_scale - hidpi_scale) > 0.005f)
+            {
+                hidpi_scale = new_scale;
+                my_lisawin->dirtyscreen = 1;
+                force_refresh();
+            }
+        }
+
+        // Commit scale to config + reload skins after resize drag settles (150ms debounce).
+        if (!m_resize_timer)
+            m_resize_timer = new wxTimer(this, ID_RESIZE_DEBOUNCE_TIMER);
+        m_resize_timer->Start(150, wxTIMER_ONE_SHOT);
+    }
+
     event.Skip();
+}
+
+void LisaEmFrame::OnResizeDebounceTimer(wxTimerEvent& WXUNUSED(event))
+{
+    set_hidpi_scale();              // update mouse_scale, save hidpi to config, reload skins if needed
+    g_snapping_window = 1;
+    setvideomode(lisa_ui_video_mode); // snap window to exact Lisa display size (no black borders)
+    g_snapping_window = 0;
+    save_global_prefs();            // persist window position + all other prefs
 }
 
 // should look into making these C++ templates instead - REFRESHRATE=1s/60Hz
@@ -4080,6 +4253,12 @@ void save_global_prefs(void)
     myConfig->Write(_T("/lisaframe/sizey"),(long)y); //-my_lisaframe->dwy);
     myConfig->Write(_T("/lisaframe/sizex"),(long)x); //-my_lisaframe->dwx);
     myConfig->Write(_T("/lisaframe/fullscreen"),(long)(my_lisaframe->IsFullScreen()) );
+    if (!my_lisaframe->IsFullScreen())
+    {
+        wxPoint pos = my_lisaframe->GetPosition();
+        myConfig->Write(_T("/lisaframe/posx"), (long)pos.x);
+        myConfig->Write(_T("/lisaframe/posy"), (long)pos.y);
+    }
     myConfig->Write(_T("/lisaskin/name"), my_lisaframe->skinname);
     myConfig->Write(_T("/hidpi_scale"),(long)(hidpi_scale * 100.0 ) );
 
@@ -4122,6 +4301,16 @@ wxSize get_size_prefs(void);
 bool LisaEmApp::OnInit()
 {
     if (!wxApp::OnInit()) return false;      // call default behaviour (mandatory)
+
+    m_checker = new wxSingleInstanceChecker(wxString::Format(_T("LisaEm-%s"), wxGetUserId().c_str()));
+    if ( m_checker->IsAnotherRunning() )
+    {
+        wxLogError(_T("Another instance of LisaEm is already running.  Exiting."));
+        delete m_checker;
+        m_checker = NULL;
+        return false;
+    }
+
     lisa_mcp_stdio_activate_from_cli();
 
     wxStandardPathsBase& stdp = wxStandardPaths::Get();
@@ -4264,6 +4453,15 @@ bool LisaEmApp::OnInit()
     #else
     my_lisaframe->use_mouse_scale=(int)myConfig->Read(_T("/use_mouse_scale"),(int)1);
     #endif
+    {
+      const char *no_mouse_scale=getenv("LISAEM_NO_MOUSE_SCALE");
+      if (no_mouse_scale && no_mouse_scale[0] && no_mouse_scale[0]!='0')
+      {
+        my_lisaframe->use_mouse_scale=0;
+        fprintf(stderr,"[mouse] LISAEM_NO_MOUSE_SCALE active; host mouse scaling disabled.\n");
+        fflush(stderr);
+      }
+    }
 
     my_lisawin->repaintall = REPAINT_INVALID_WINDOW;
     my_lisaframe->Show(true);                // Light it up
@@ -4365,6 +4563,17 @@ bool LisaEmApp::OnInit()
 
     ALERT_LOG(0,"OnInit Done.")
     return true;
+}
+
+
+int LisaEmApp::OnExit()
+{
+    if (m_checker)
+    {
+        delete m_checker;
+        m_checker = NULL;
+    }
+    return wxApp::OnExit();
 }
 
 
@@ -6427,6 +6636,15 @@ void quit_lisaem(void) {  wxCommandEvent foo; my_lisaframe->OnQuit(foo); }
 
 extern "C" void lisa_powered_off(void)
 {
+  fprintf(stderr,
+          "[lisa-poweroff] pc=%08x context=%d os=%d profile_power=%d clocks=%llu\n",
+          (unsigned int)reg68k_pc,
+          (int)context,
+          (int)running_lisa_os,
+          (int)profile_power,
+          (unsigned long long)cpu68k_clocks);
+  fflush(stderr);
+
   my_lisaframe->running=emulation_off;                // no longer running
   if  ((my_lisawin->floppystate & FLOPPY_ANIM_MASK)!=FLOPPY_EMPTY) 
       {
@@ -6930,10 +7148,8 @@ void LisaEmFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
     EXTERMINATE(my_poweronDC           );
     EXTERMINATE(my_poweroffDC          );
 
-    if (m_emulation_timer) 
-    {
-        m_emulation_timer->Stop();
-    }
+    if (m_resize_timer)    { m_resize_timer->Stop();    }
+    if (m_emulation_timer) { m_emulation_timer->Stop(); }
 
     if (my_LisaConfigFrame)
     {
@@ -6951,11 +7167,8 @@ void LisaEmFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
     wxMilliSleep(1000);
 #endif
 
-    if (m_emulation_timer)
-    {
-        delete m_emulation_timer;
-        m_emulation_timer = NULL;
-    }
+    if (m_resize_timer)    { delete m_resize_timer;    m_resize_timer    = NULL; }
+    if (m_emulation_timer) { delete m_emulation_timer; m_emulation_timer = NULL; }
 
     Destroy();
 }
@@ -8170,6 +8383,7 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
 
     
     barrier=0;
+    m_resize_timer = NULL;
     lisa_mcp_init_server();
     lisa_mcp_stdio_init();
     clx=0;
@@ -8630,6 +8844,18 @@ LisaEmFrame::LisaEmFrame(const wxString& title)
 
            my_lisawin->SetMinSize(wxSize( _H(720), _H(364) ));
            my_lisawin->EnableScrolling(false,false);
+    }
+
+    // Restore saved window position if it falls on a connected display.
+    {
+        long px = myConfig->Read(_T("/lisaframe/posx"), (long)-32768);
+        long py = myConfig->Read(_T("/lisaframe/posy"), (long)-32768);
+        if (px > -32768 && py > -32768)
+        {
+            wxPoint pt((int)px, (int)py);
+            if (wxDisplay::GetFromPoint(pt) != wxNOT_FOUND)
+                Move(pt);
+        }
     }
 
     SendSizeEvent();
@@ -9294,15 +9520,8 @@ int initialize_all_subsystems(void)
        case 1024 : maxlisaram=0x180000;  minlisaram=0x080000;  break;     // two 512KB boards in slot1, slot 2
        case 1536 : maxlisaram=0x200000;  minlisaram=0x080000;  break;     // meh, this causes crashes // 512KB board in slot1, 1024KB board in slot 2
 
-       #ifdef ALLOW2MBRAM
        case 2048 :
-                   #ifdef FULL2MBRAM
-                   maxlisaram=0x200000;  minlisaram=0x000000;  break;     // two 1024KB boards in slot 1,2 I can do -128k here but no less for max ram, but not 2MB with H-ROM
-                   #else
-                   maxlisaram=0x1e0000;  minlisaram=0x000000;  break;
-                 //maxlisaram=0x140000;  minlisaram=0x000000;  break;     // two 1024KB boards in slot 1,2 I can do -128k here but no less for max ram, but not 2MB with H-ROM
-                   #endif
-       #endif
+                   maxlisaram=0x200000;  minlisaram=0x000000;  break;     // two 1024KB boards in slot 1,2; identity mapping for Xenix
 
        default:    maxlisaram=0x200000;  minlisaram=0x080000;  break;     // 512KB board in slot1, 1024KB board in slot 2
     }
